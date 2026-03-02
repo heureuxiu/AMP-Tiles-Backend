@@ -10,6 +10,11 @@ const quotationItemSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  unitType: {
+    type: String,
+    enum: ['Box', 'Sq Ft', 'Sq Meter', 'Piece'],
+    default: 'Box',
+  },
   quantity: {
     type: Number,
     required: [true, 'Please provide quantity'],
@@ -20,10 +25,26 @@ const quotationItemSchema = new mongoose.Schema({
     required: [true, 'Please provide rate'],
     min: [0, 'Rate cannot be negative'],
   },
+  discountPercent: {
+    type: Number,
+    default: 0,
+    min: 0,
+    max: 100,
+  },
+  taxPercent: {
+    type: Number,
+    default: 0,
+    min: 0,
+    max: 100,
+  },
   lineTotal: {
     type: Number,
     required: true,
     min: 0,
+  },
+  coverageSqm: {
+    type: Number,
+    default: null,
   },
 });
 
@@ -101,7 +122,8 @@ const quotationSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['draft', 'sent', 'converted', 'expired', 'cancelled'],
+      // Accepted / Rejected / Converted to Invoice (converted) – keep cancelled for backward compatibility
+      enum: ['draft', 'sent', 'accepted', 'rejected', 'expired', 'converted', 'cancelled'],
       default: 'draft',
     },
     convertedToInvoice: {
@@ -124,16 +146,34 @@ const quotationSchema = new mongoose.Schema(
 );
 
 // Generate quotation number before saving
+// More robust against duplicate-key race conditions: we loop until we find a free number.
 quotationSchema.pre('save', async function () {
-  if (this.isNew && !this.quotationNumber) {
-    const year = new Date().getFullYear();
-    const count = await this.constructor.countDocuments({
-      createdAt: {
-        $gte: new Date(`${year}-01-01`),
-        $lt: new Date(`${year + 1}-01-01`),
-      },
-    });
-    this.quotationNumber = `QT-${year}-${String(count + 1).padStart(3, '0')}`;
+  if (!this.isNew || this.quotationNumber) return;
+
+  const year = new Date().getFullYear();
+
+  // Start from count+1, but if that number already exists (because of concurrent creates
+  // or imported data), keep incrementing until we find a free slot.
+  const baseCount = await this.constructor.countDocuments({
+    createdAt: {
+      $gte: new Date(`${year}-01-01`),
+      $lt: new Date(`${year + 1}-01-01`),
+    },
+  });
+
+  let sequence = baseCount + 1;
+  // Safety cap to avoid infinite loops in case of unexpected data – 10k quotations per year.
+  const maxAttempts = 10000;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const candidate = `QT-${year}-${String(sequence).padStart(3, '0')}`;
+    // Check if this quotation number is already taken
+    // eslint-disable-next-line no-await-in-loop
+    const exists = await this.constructor.exists({ quotationNumber: candidate });
+    if (!exists) {
+      this.quotationNumber = candidate;
+      return;
+    }
+    sequence += 1;
   }
 });
 

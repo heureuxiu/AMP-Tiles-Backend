@@ -96,6 +96,57 @@ exports.getQuotation = async (req, res) => {
   }
 };
 
+// Helper to build one quotation item with discount/tax and optional tiles coverage
+function buildQuotationItem(product, item) {
+  const quantity = Number(item.quantity) || 0;
+  const rate = Number(item.rate) || product.retailPrice || product.price || 0;
+  const unitType = item.unitType || 'Box';
+  const discountPercent = Number(item.discountPercent) || 0;
+  const taxPercent =
+    item.taxPercent != null
+      ? Number(item.taxPercent)
+      : product.taxPercent != null
+      ? product.taxPercent
+      : 0;
+
+  const base = quantity * rate;
+  const discountAmount = (base * discountPercent) / 100;
+  const taxable = base - discountAmount;
+  const taxAmount = (taxable * taxPercent) / 100;
+  const lineTotal = Math.round((taxable + taxAmount) * 100) / 100;
+
+  // Tiles coverage in sqm (optional)
+  let coverageSqm = null;
+  const covPerBox = product.coveragePerBox;
+  const covUnit = (product.coveragePerBoxUnit || 'sqft').toLowerCase();
+  if (covPerBox != null && covPerBox > 0) {
+    if (unitType === 'Box') {
+      coverageSqm = covUnit === 'sqm' ? quantity * covPerBox : (quantity * covPerBox) / 10.764;
+    } else if (unitType === 'Sq Meter') {
+      coverageSqm = quantity;
+    } else if (unitType === 'Sq Ft') {
+      coverageSqm = quantity / 10.764;
+    }
+  }
+
+  return {
+    populated: {
+      product: product._id,
+      productName: product.name,
+      unitType,
+      quantity,
+      rate,
+      discountPercent,
+      taxPercent,
+      lineTotal,
+      coverageSqm: coverageSqm != null ? Math.round(coverageSqm * 1000) / 1000 : undefined,
+    },
+    base,
+    discountAmount,
+    taxAmount,
+  };
+}
+
 // @desc    Create new quotation
 // @route   POST /api/quotations
 // @access  Private
@@ -125,8 +176,11 @@ exports.createQuotation = async (req, res) => {
       });
     }
 
-    // Validate and populate items
+    // Validate and populate items (with discount / tax per line)
     const populatedItems = [];
+    let subtotal = 0;
+    let totalDiscount = 0;
+    let totalTax = 0;
     for (const item of items) {
       const product = await Product.findById(item.product);
       if (!product) {
@@ -136,31 +190,14 @@ exports.createQuotation = async (req, res) => {
         });
       }
 
-      const lineTotal = item.quantity * item.rate;
-      populatedItems.push({
-        product: product._id,
-        productName: product.name,
-        quantity: item.quantity,
-        rate: item.rate,
-        lineTotal,
-      });
+      const built = buildQuotationItem(product, item);
+      populatedItems.push(built.populated);
+      subtotal += built.base;
+      totalDiscount += built.discountAmount;
+      totalTax += built.taxAmount;
     }
 
-    // Calculate totals
-    const subtotal = populatedItems.reduce((sum, item) => sum + item.lineTotal, 0);
-    
-    let discountAmount = 0;
-    if (discount && discount > 0) {
-      if (discountType === 'percentage') {
-        discountAmount = (subtotal * discount) / 100;
-      } else {
-        discountAmount = discount;
-      }
-    }
-
-    const afterDiscount = subtotal - discountAmount;
-    const tax = (afterDiscount * (taxRate || 10)) / 100;
-    const grandTotal = afterDiscount + tax;
+    const grandTotal = subtotal - totalDiscount + totalTax;
 
     // Create quotation
     const quotation = await Quotation.create({
@@ -172,9 +209,9 @@ exports.createQuotation = async (req, res) => {
       validUntil,
       items: populatedItems,
       subtotal,
-      discount: discountAmount,
+      discount: totalDiscount,
       discountType: discountType || 'fixed',
-      tax,
+      tax: totalTax,
       taxRate: taxRate || 10,
       grandTotal,
       notes,
@@ -240,6 +277,9 @@ exports.updateQuotation = async (req, res) => {
     // If items are being updated, recalculate totals
     if (items && items.length > 0) {
       const populatedItems = [];
+      let subtotal = 0;
+      let totalDiscount = 0;
+      let totalTax = 0;
       for (const item of items) {
         const product = await Product.findById(item.product);
         if (!product) {
@@ -249,36 +289,20 @@ exports.updateQuotation = async (req, res) => {
           });
         }
 
-        const lineTotal = item.quantity * item.rate;
-        populatedItems.push({
-          product: product._id,
-          productName: product.name,
-          quantity: item.quantity,
-          rate: item.rate,
-          lineTotal,
-        });
+        const built = buildQuotationItem(product, item);
+        populatedItems.push(built.populated);
+        subtotal += built.base;
+        totalDiscount += built.discountAmount;
+        totalTax += built.taxAmount;
       }
 
-      const subtotal = populatedItems.reduce((sum, item) => sum + item.lineTotal, 0);
-      
-      let discountAmount = 0;
-      if (discount && discount > 0) {
-        if (discountType === 'percentage') {
-          discountAmount = (subtotal * discount) / 100;
-        } else {
-          discountAmount = discount;
-        }
-      }
-
-      const afterDiscount = subtotal - discountAmount;
-      const tax = (afterDiscount * (taxRate || quotation.taxRate)) / 100;
-      const grandTotal = afterDiscount + tax;
+      const grandTotal = subtotal - totalDiscount + totalTax;
 
       quotation.items = populatedItems;
       quotation.subtotal = subtotal;
-      quotation.discount = discountAmount;
+      quotation.discount = totalDiscount;
       quotation.discountType = discountType || quotation.discountType;
-      quotation.tax = tax;
+      quotation.tax = totalTax;
       quotation.taxRate = taxRate || quotation.taxRate;
       quotation.grandTotal = grandTotal;
     }
