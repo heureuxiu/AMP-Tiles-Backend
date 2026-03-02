@@ -52,6 +52,7 @@ function buildInvoiceHtml(invoice, companyInfo = {}) {
     (item) => `
     <tr>
       <td class="product">${escapeHtml(item.productName)}</td>
+      <td class="unit">${escapeHtml(item.unitType || '')}</td>
       <td class="qty">${escapeHtml(item.quantity)}</td>
       <td class="rate">${formatCurrency(item.rate)}</td>
       <td class="amount">${formatCurrency(item.lineTotal)}</td>
@@ -87,8 +88,10 @@ function buildInvoiceHtml(invoice, companyInfo = {}) {
     .meta-row .value { font-weight: 500; min-width: 120px; }
     table.items { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
     table.items th { text-align: left; padding: 12px 8px; border-bottom: 2px solid #333; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #444; }
+    table.items th.unit { min-width: 60px; }
     table.items th.qty, table.items th.rate, table.items th.amount { text-align: right; }
     table.items td { padding: 12px 8px; border-bottom: 1px solid #e5e5e5; }
+    table.items td.unit { font-size: 12px; color: #555; }
     table.items td.qty, table.items td.rate, table.items td.amount { text-align: right; }
     table.items .product { font-weight: 500; }
     .totals { margin-left: auto; width: 280px; }
@@ -133,6 +136,7 @@ function buildInvoiceHtml(invoice, companyInfo = {}) {
     <thead>
       <tr>
         <th class="product">Product</th>
+        <th class="unit">Unit</th>
         <th class="qty">Qty</th>
         <th class="rate">Rate</th>
         <th class="amount">Amount</th>

@@ -92,6 +92,17 @@ exports.createProduct = async (req, res) => {
     // Add user to req.body
     req.body.createdBy = req.user.id;
 
+    // When third-party, supplier name is required
+    if (req.body.supplierType === 'third-party' && !req.body.supplierName?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Supplier name is required when Supplier Type is Third-Party',
+      });
+    }
+    if (req.body.supplierType === 'own') {
+      req.body.supplierName = '';
+    }
+
     // Check if SKU already exists
     const existingProduct = await Product.findOne({ sku: req.body.sku });
     if (existingProduct) {
@@ -127,6 +138,17 @@ exports.updateProduct = async (req, res) => {
         success: false,
         message: 'Product not found',
       });
+    }
+
+    // When third-party, supplier name is required
+    if (req.body.supplierType === 'third-party' && req.body.supplierName !== undefined && !String(req.body.supplierName || '').trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Supplier name is required when Supplier Type is Third-Party',
+      });
+    }
+    if (req.body.supplierType === 'own') {
+      req.body.supplierName = '';
     }
 
     // Check if SKU is being updated and if it already exists

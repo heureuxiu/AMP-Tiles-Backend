@@ -17,58 +17,48 @@ exports.getPurchaseOrders = async (req, res) => {
       sortOrder = 'desc',
     } = req.query;
 
-    // Build query
     const query = {};
-
-    // Search filter
     if (search) {
       query.$or = [
         { poNumber: { $regex: search, $options: 'i' } },
         { supplierName: { $regex: search, $options: 'i' } },
       ];
     }
-
-    // Supplier filter
-    if (supplier && supplier !== 'all') {
-      query.supplier = supplier;
-    }
-
-    // Status filter
-    if (status && status !== 'all') {
-      query.status = status;
-    }
-
-    // Date range filter
+    if (supplier && supplier !== 'all') query.supplier = supplier;
+    if (status && status !== 'all') query.status = status;
     if (startDate || endDate) {
       query.poDate = {};
       if (startDate) query.poDate.$gte = new Date(startDate);
       if (endDate) query.poDate.$lte = new Date(endDate);
     }
 
-    // Build sort object
     const sortObj = {};
     sortObj[sortBy] = sortOrder === 'asc' ? 1 : -1;
 
-    // Execute query
     const purchaseOrders = await PurchaseOrder.find(query)
       .populate('supplier', 'name supplierNumber')
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku')
+      .populate('items.product', 'name sku unit tilesPerBox coveragePerBox coveragePerBoxUnit')
       .sort(sortObj);
 
-    // Get stats
+    const statuses = [
+      'draft',
+      'sent',
+      'sent_to_supplier',
+      'confirmed',
+      'partially_received',
+      'received',
+      'cancelled',
+    ];
     const stats = {
       total: await PurchaseOrder.countDocuments(),
-      draft: await PurchaseOrder.countDocuments({ status: 'draft' }),
-      sent: await PurchaseOrder.countDocuments({ status: 'sent' }),
-      received: await PurchaseOrder.countDocuments({ status: 'received' }),
-      cancelled: await PurchaseOrder.countDocuments({ status: 'cancelled' }),
       totalValue: 0,
     };
-
-    // Calculate total value
+    for (const s of statuses) {
+      stats[s] = await PurchaseOrder.countDocuments({ status: s });
+    }
     const allOrders = await PurchaseOrder.find();
-    stats.totalValue = allOrders.reduce((sum, po) => sum + po.grandTotal, 0);
+    stats.totalValue = allOrders.reduce((sum, po) => sum + (po.grandTotal || 0), 0);
 
     res.status(200).json({
       success: true,
@@ -94,7 +84,7 @@ exports.getPurchaseOrder = async (req, res) => {
     const purchaseOrder = await PurchaseOrder.findById(req.params.id)
       .populate('supplier')
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku unit');
+      .populate('items.product', 'name sku unit tilesPerBox coveragePerBox coveragePerBoxUnit');
 
     if (!purchaseOrder) {
       return res.status(404).json({
@@ -117,6 +107,39 @@ exports.getPurchaseOrder = async (req, res) => {
   }
 };
 
+// Helper: compute line total and optionally coverage from product
+function buildItem(product, item) {
+  const qty = Number(item.quantityOrdered) || 0;
+  const rate = Number(item.rate) || 0;
+  const discount = Number(item.discountPercent) || 0;
+  const tax = Number(item.taxPercent) || 0;
+  const afterDiscount = qty * rate * (1 - discount / 100);
+  const lineTotal = Math.round(afterDiscount * (1 + tax / 100) * 100) / 100;
+  let coverageSqm = null;
+  if (product && (product.coveragePerBox || product.tilesPerBox)) {
+    const coveragePerBox = Number(product.coveragePerBox) || 0;
+    const perBox = product.coveragePerBoxUnit === 'sqm' ? coveragePerBox : (coveragePerBox * 0.092903) || 0;
+    if (item.unitType === 'Box' && perBox) coverageSqm = qty * perBox;
+    else if (item.unitType === 'Sq Ft' && qty) coverageSqm = Math.round((qty * 0.092903) * 100) / 100;
+  }
+  return {
+    product: product._id,
+    productName: product.name,
+    sku: product.sku || '',
+    unitType: item.unitType || 'Box',
+    quantityOrdered: qty,
+    rate,
+    discountPercent: discount,
+    taxPercent: tax,
+    lineTotal,
+    coverageSqm,
+    quantityReceived: Number(item.quantityReceived) || 0,
+    damagedQuantity: Number(item.damagedQuantity) || 0,
+    batchNumber: item.batchNumber || '',
+    receivedDate: item.receivedDate || null,
+  };
+}
+
 // @desc    Create new purchase order
 // @route   POST /api/purchase-orders
 // @access  Private
@@ -126,13 +149,15 @@ exports.createPurchaseOrder = async (req, res) => {
       supplier,
       poDate,
       expectedDeliveryDate,
+      warehouseLocation,
+      currency,
+      paymentTerms,
+      deliveryAddress,
       items,
-      taxRate,
       notes,
       terms,
     } = req.body;
 
-    // Validation
     if (!supplier) {
       return res.status(400).json({
         success: false,
@@ -147,7 +172,6 @@ exports.createPurchaseOrder = async (req, res) => {
       });
     }
 
-    // Verify supplier exists
     const supplierDoc = await Supplier.findById(supplier);
     if (!supplierDoc) {
       return res.status(404).json({
@@ -156,16 +180,14 @@ exports.createPurchaseOrder = async (req, res) => {
       });
     }
 
-    // Validate and calculate item totals
     const validatedItems = [];
     for (const item of items) {
-      if (!item.product || !item.quantity || !item.rate) {
+      if (!item.product || item.quantityOrdered == null || item.rate == null) {
         return res.status(400).json({
           success: false,
-          message: 'Each item must have product, quantity, and rate',
+          message: 'Each item must have product, quantityOrdered, and rate',
         });
       }
-
       const product = await Product.findById(item.product);
       if (!product) {
         return res.status(404).json({
@@ -173,32 +195,26 @@ exports.createPurchaseOrder = async (req, res) => {
           message: `Product with ID ${item.product} not found`,
         });
       }
-
-      validatedItems.push({
-        product: item.product,
-        productName: product.name,
-        quantity: item.quantity,
-        rate: item.rate,
-        lineTotal: item.quantity * item.rate,
-      });
+      validatedItems.push(buildItem(product, item));
     }
 
-    // Create purchase order
     const purchaseOrder = await PurchaseOrder.create({
       supplier,
       supplierName: supplierDoc.name,
       poDate: poDate || Date.now(),
-      expectedDeliveryDate,
+      expectedDeliveryDate: expectedDeliveryDate || null,
+      warehouseLocation: warehouseLocation || '',
+      currency: currency || 'AUD',
+      paymentTerms: paymentTerms || '',
+      deliveryAddress: deliveryAddress || '',
       items: validatedItems,
-      taxRate: taxRate || 10,
-      notes,
-      terms,
+      notes: notes || '',
+      terms: terms || '',
       createdBy: req.user.id,
     });
 
-    // Populate references before sending response
     await purchaseOrder.populate('supplier');
-    await purchaseOrder.populate('items.product', 'name sku');
+    await purchaseOrder.populate('items.product', 'name sku tilesPerBox coveragePerBox coveragePerBoxUnit');
 
     res.status(201).json({
       success: true,
@@ -229,8 +245,7 @@ exports.updatePurchaseOrder = async (req, res) => {
       });
     }
 
-    // Check if PO is already received or cancelled
-    if (purchaseOrder.status === 'received' || purchaseOrder.status === 'cancelled') {
+    if (['received', 'cancelled'].includes(purchaseOrder.status)) {
       return res.status(400).json({
         success: false,
         message: `Cannot update ${purchaseOrder.status} purchase order`,
@@ -241,14 +256,16 @@ exports.updatePurchaseOrder = async (req, res) => {
       supplier,
       poDate,
       expectedDeliveryDate,
+      warehouseLocation,
+      currency,
+      paymentTerms,
+      deliveryAddress,
       items,
-      taxRate,
       notes,
       terms,
       status,
     } = req.body;
 
-    // If supplier is being changed, verify it exists
     if (supplier && supplier !== purchaseOrder.supplier.toString()) {
       const supplierDoc = await Supplier.findById(supplier);
       if (!supplierDoc) {
@@ -261,17 +278,25 @@ exports.updatePurchaseOrder = async (req, res) => {
       purchaseOrder.supplierName = supplierDoc.name;
     }
 
-    // If items are being updated, validate them
+    if (poDate) purchaseOrder.poDate = poDate;
+    if (expectedDeliveryDate !== undefined) purchaseOrder.expectedDeliveryDate = expectedDeliveryDate;
+    if (warehouseLocation !== undefined) purchaseOrder.warehouseLocation = warehouseLocation;
+    if (currency !== undefined) purchaseOrder.currency = currency;
+    if (paymentTerms !== undefined) purchaseOrder.paymentTerms = paymentTerms;
+    if (deliveryAddress !== undefined) purchaseOrder.deliveryAddress = deliveryAddress;
+    if (notes !== undefined) purchaseOrder.notes = notes;
+    if (terms !== undefined) purchaseOrder.terms = terms;
+    if (status) purchaseOrder.status = status;
+
     if (items && items.length > 0) {
       const validatedItems = [];
       for (const item of items) {
-        if (!item.product || !item.quantity || !item.rate) {
+        if (!item.product || item.quantityOrdered == null || item.rate == null) {
           return res.status(400).json({
             success: false,
-            message: 'Each item must have product, quantity, and rate',
+            message: 'Each item must have product, quantityOrdered, and rate',
           });
         }
-
         const product = await Product.findById(item.product);
         if (!product) {
           return res.status(404).json({
@@ -279,31 +304,20 @@ exports.updatePurchaseOrder = async (req, res) => {
             message: `Product with ID ${item.product} not found`,
           });
         }
-
-        validatedItems.push({
-          product: item.product,
-          productName: product.name,
-          quantity: item.quantity,
-          rate: item.rate,
-          lineTotal: item.quantity * item.rate,
-        });
+        const built = buildItem(product, item);
+        if (item._id) built._id = item._id;
+        if (item.quantityReceived != null) built.quantityReceived = Number(item.quantityReceived);
+        if (item.damagedQuantity != null) built.damagedQuantity = Number(item.damagedQuantity);
+        if (item.batchNumber != null) built.batchNumber = item.batchNumber;
+        if (item.receivedDate != null) built.receivedDate = item.receivedDate;
+        validatedItems.push(built);
       }
       purchaseOrder.items = validatedItems;
     }
 
-    // Update other fields
-    if (poDate) purchaseOrder.poDate = poDate;
-    if (expectedDeliveryDate) purchaseOrder.expectedDeliveryDate = expectedDeliveryDate;
-    if (taxRate !== undefined) purchaseOrder.taxRate = taxRate;
-    if (notes !== undefined) purchaseOrder.notes = notes;
-    if (terms !== undefined) purchaseOrder.terms = terms;
-    if (status) purchaseOrder.status = status;
-
     await purchaseOrder.save();
-
-    // Populate references
     await purchaseOrder.populate('supplier');
-    await purchaseOrder.populate('items.product', 'name sku');
+    await purchaseOrder.populate('items.product', 'name sku tilesPerBox coveragePerBox coveragePerBoxUnit');
 
     res.status(200).json({
       success: true,
@@ -320,7 +334,7 @@ exports.updatePurchaseOrder = async (req, res) => {
   }
 };
 
-// @desc    Mark purchase order as received (and update stock)
+// @desc    Receive goods (per-line quantities). Updates stock only for quantityReceived.
 // @route   POST /api/purchase-orders/:id/receive
 // @access  Private
 exports.receivePurchaseOrder = async (req, res) => {
@@ -337,7 +351,7 @@ exports.receivePurchaseOrder = async (req, res) => {
     if (purchaseOrder.status === 'received') {
       return res.status(400).json({
         success: false,
-        message: 'Purchase order is already marked as received',
+        message: 'Purchase order is already fully received',
       });
     }
 
@@ -348,23 +362,63 @@ exports.receivePurchaseOrder = async (req, res) => {
       });
     }
 
-    // Update stock for each item
-    for (const item of purchaseOrder.items) {
-      const product = await Product.findById(item.product);
-      if (product) {
-        product.stock += item.quantity;
-        await product.save();
+    let { items: receiveItems } = req.body || {};
+    // receiveItems: array of { index or productId, quantityReceived, damagedQuantity, batchNumber }
+    if (!receiveItems || !Array.isArray(receiveItems) || receiveItems.length === 0) {
+      receiveItems = purchaseOrder.items.map((item, index) => ({
+        index,
+        quantityReceived: Math.max(0, item.quantityOrdered - (item.quantityReceived || 0) - (item.damagedQuantity || 0)),
+        damagedQuantity: 0,
+      }));
+    }
+
+    if (receiveItems && receiveItems.length > 0) {
+      const receivedDate = new Date();
+      for (let i = 0; i < receiveItems.length; i++) {
+        const r = receiveItems[i];
+        const itemIndex = r.index !== undefined ? r.index : purchaseOrder.items.findIndex((it) => it.product._id.toString() === (r.productId || r.product));
+        if (itemIndex < 0 || itemIndex >= purchaseOrder.items.length) continue;
+
+        const item = purchaseOrder.items[itemIndex];
+        const qtyReceived = Number(r.quantityReceived) || 0;
+        const damaged = Number(r.damagedQuantity) || 0;
+
+        item.quantityReceived = (item.quantityReceived || 0) + qtyReceived;
+        item.damagedQuantity = (item.damagedQuantity || 0) + damaged;
+        if (r.batchNumber) item.batchNumber = r.batchNumber;
+        item.receivedDate = item.receivedDate || receivedDate;
+
+        // Increase product stock by quantityReceived only
+        if (qtyReceived > 0 && item.product) {
+          const product = await Product.findById(item.product._id || item.product);
+          if (product) {
+            product.stock = (product.stock || 0) + qtyReceived;
+            await product.save();
+          }
+        }
       }
     }
 
-    // Update PO status
-    purchaseOrder.status = 'received';
-    purchaseOrder.receivedDate = new Date();
+    // Determine new status
+    const allReceived = purchaseOrder.items.every((item) => {
+      const remaining = item.quantityOrdered - (item.quantityReceived || 0) - (item.damagedQuantity || 0);
+      return remaining <= 0;
+    });
+    const anyReceived = purchaseOrder.items.some((item) => (item.quantityReceived || 0) > 0);
+
+    if (allReceived) {
+      purchaseOrder.status = 'received';
+    } else if (anyReceived) {
+      purchaseOrder.status = 'partially_received';
+    }
+
     await purchaseOrder.save();
+    await purchaseOrder.populate('supplier');
+    await purchaseOrder.populate('items.product', 'name sku tilesPerBox coveragePerBox coveragePerBoxUnit');
 
     res.status(200).json({
       success: true,
-      message: 'Purchase order marked as received and stock updated',
+      message: 'Goods receiving updated and stock increased for received quantities',
       purchaseOrder,
     });
   } catch (error) {
@@ -391,7 +445,6 @@ exports.deletePurchaseOrder = async (req, res) => {
       });
     }
 
-    // Only allow deletion of draft purchase orders
     if (purchaseOrder.status !== 'draft') {
       return res.status(400).json({
         success: false,
@@ -420,23 +473,24 @@ exports.deletePurchaseOrder = async (req, res) => {
 // @access  Private
 exports.getPurchaseOrderStats = async (req, res) => {
   try {
-    const stats = {
-      totalPurchaseOrders: await PurchaseOrder.countDocuments(),
-      draft: await PurchaseOrder.countDocuments({ status: 'draft' }),
-      sent: await PurchaseOrder.countDocuments({ status: 'sent' }),
-      received: await PurchaseOrder.countDocuments({ status: 'received' }),
-      cancelled: await PurchaseOrder.countDocuments({ status: 'cancelled' }),
-      recentPurchaseOrders: await PurchaseOrder.countDocuments({
-        createdAt: {
-          $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // Last 30 days
-        },
-      }),
-      totalValue: 0,
-    };
-
-    // Calculate total value
+    const statuses = [
+      'draft',
+      'sent',
+      'sent_to_supplier',
+      'confirmed',
+      'partially_received',
+      'received',
+      'cancelled',
+    ];
+    const stats = { totalPurchaseOrders: await PurchaseOrder.countDocuments(), totalValue: 0 };
+    for (const s of statuses) {
+      stats[s] = await PurchaseOrder.countDocuments({ status: s });
+    }
     const allOrders = await PurchaseOrder.find();
-    stats.totalValue = allOrders.reduce((sum, po) => sum + po.grandTotal, 0);
+    stats.totalValue = allOrders.reduce((sum, po) => sum + (po.grandTotal || 0), 0);
+    stats.recentPurchaseOrders = await PurchaseOrder.countDocuments({
+      createdAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+    });
 
     res.status(200).json({
       success: true,

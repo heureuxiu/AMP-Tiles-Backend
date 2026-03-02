@@ -58,6 +58,11 @@ const supplierSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    deliveryMethod: {
+      type: String,
+      trim: true,
+      enum: ['Supplier Delivery', 'Pickup', 'Freight'],
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

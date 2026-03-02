@@ -2,17 +2,76 @@ const Invoice = require('../models/Invoice');
 const Product = require('../models/Product');
 const { generateInvoicePdf } = require('../utils/invoicePdf');
 
+// Build one invoice line item with line total and optional coverage (tiles)
+function buildInvoiceItem(product, item) {
+  const quantity = Number(item.quantity) || 0;
+  const rate = Number(item.rate) ?? product.retailPrice ?? product.price ?? 0;
+  const discountPercent = Number(item.discountPercent) || 0;
+  const taxPercent = Number(item.taxPercent) ?? product.taxPercent ?? 0;
+  const unitType = item.unitType || 'Box';
+
+  const base = quantity * rate;
+  const lineTotal = Math.round(base * (1 - discountPercent / 100) * (1 + taxPercent / 100) * 100) / 100;
+
+  let coverageSqm = null;
+  const covPerBox = product.coveragePerBox;
+  const covUnit = product.coveragePerBoxUnit || 'sqft';
+  if (covPerBox != null && covPerBox > 0) {
+    if (unitType === 'Box') {
+      coverageSqm = covUnit === 'sqm' ? quantity * covPerBox : (quantity * covPerBox) / 10.764;
+    } else if (unitType === 'Sq Meter' && quantity > 0) {
+      coverageSqm = quantity;
+    } else if (unitType === 'Sq Ft' && quantity > 0) {
+      coverageSqm = quantity / 10.764;
+    }
+  }
+
+  return {
+    product: product._id,
+    productName: product.name,
+    unitType,
+    quantity,
+    rate,
+    discountPercent,
+    taxPercent,
+    lineTotal,
+    coverageSqm: coverageSqm != null ? Math.round(coverageSqm * 1000) / 1000 : undefined,
+  };
+}
+
+// Decrease stock for invoice items (when confirming/delivering)
+async function decreaseStockForInvoice(invoice) {
+  for (const item of invoice.items) {
+    const product = await Product.findById(item.product);
+    if (!product) continue;
+    const qty = Number(item.quantity) || 0;
+    if (qty <= 0) continue;
+    product.stock = Math.max(0, (product.stock || 0) - qty);
+    await product.save();
+  }
+}
+
+// Restore stock when reverting from confirmed/delivered to draft
+async function restoreStockForInvoice(invoice) {
+  for (const item of invoice.items) {
+    const product = await Product.findById(item.product);
+    if (!product) continue;
+    const qty = Number(item.quantity) || 0;
+    if (qty > 0) {
+      product.stock = (product.stock || 0) + qty;
+      await product.save();
+    }
+  }
+}
+
 // @desc    Get all invoices
 // @route   GET /api/invoices
 // @access  Private
 exports.getInvoices = async (req, res) => {
   try {
     const { search, status, startDate, endDate, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
-
-    // Build query
     const query = {};
 
-    // Search by invoice number, customer name, phone, or email
     if (search) {
       query.$or = [
         { invoiceNumber: { $regex: search, $options: 'i' } },
@@ -21,54 +80,33 @@ exports.getInvoices = async (req, res) => {
         { customerEmail: { $regex: search, $options: 'i' } },
       ];
     }
-
-    // Filter by status
-    if (status && status !== 'all') {
-      query.status = status;
-    }
-
-    // Filter by date range
+    if (status && status !== 'all') query.status = status;
     if (startDate || endDate) {
       query.invoiceDate = {};
-      if (startDate) {
-        query.invoiceDate.$gte = new Date(startDate);
-      }
-      if (endDate) {
-        query.invoiceDate.$lte = new Date(endDate);
-      }
+      if (startDate) query.invoiceDate.$gte = new Date(startDate);
+      if (endDate) query.invoiceDate.$lte = new Date(endDate);
     }
 
-    // Execute query
     const sort = {};
     sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
-
     const invoices = await Invoice.find(query)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku')
+      .populate('items.product', 'name sku retailPrice price coveragePerBox coveragePerBoxUnit')
       .sort(sort);
 
-    // Get statistics
-    const stats = {
-      total: invoices.length,
-      draft: invoices.filter(inv => inv.status === 'draft').length,
-      sent: invoices.filter(inv => inv.status === 'sent').length,
-      paid: invoices.filter(inv => inv.status === 'paid').length,
-      overdue: invoices.filter(inv => inv.status === 'overdue').length,
-      cancelled: invoices.filter(inv => inv.status === 'cancelled').length,
-      totalRevenue: invoices
-        .filter(inv => inv.status === 'paid')
-        .reduce((sum, inv) => sum + inv.grandTotal, 0),
-      pendingAmount: invoices
-        .filter(inv => inv.status === 'sent' || inv.status === 'overdue')
-        .reduce((sum, inv) => sum + inv.grandTotal, 0),
-    };
-
-    res.status(200).json({
-      success: true,
-      count: invoices.length,
-      stats,
-      invoices,
+    const statuses = ['draft', 'confirmed', 'delivered', 'cancelled', 'sent', 'paid', 'overdue'];
+    const stats = { total: invoices.length };
+    statuses.forEach(s => {
+      stats[s] = invoices.filter(inv => inv.status === s).length;
     });
+    stats.totalRevenue = invoices
+      .filter(inv => inv.paymentStatus === 'paid' || inv.status === 'paid')
+      .reduce((sum, inv) => sum + (inv.grandTotal || 0), 0);
+    stats.pendingAmount = invoices
+      .filter(inv => inv.paymentStatus !== 'paid' && inv.status !== 'cancelled')
+      .reduce((sum, inv) => sum + (inv.remainingBalance || inv.grandTotal || 0), 0);
+
+    res.status(200).json({ success: true, count: invoices.length, stats, invoices });
   } catch (error) {
     console.error('Get invoices error:', error);
     res.status(500).json({
@@ -86,20 +124,13 @@ exports.getInvoice = async (req, res) => {
   try {
     const invoice = await Invoice.findById(req.params.id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku price')
+      .populate('items.product', 'name sku retailPrice price coveragePerBox coveragePerBoxUnit')
       .populate('quotation', 'quotationNumber');
 
     if (!invoice) {
-      return res.status(404).json({
-        success: false,
-        message: 'Invoice not found',
-      });
+      return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
-
-    res.status(200).json({
-      success: true,
-      invoice,
-    });
+    res.status(200).json({ success: true, invoice });
   } catch (error) {
     console.error('Get invoice error:', error);
     res.status(500).json({
@@ -129,10 +160,11 @@ exports.createInvoice = async (req, res) => {
       taxRate,
       notes,
       terms,
-      status,
+      status: reqStatus,
+      paymentMethod,
+      amountPaid,
     } = req.body;
 
-    // Validate required fields
     if (!customerName || !items || items.length === 0) {
       return res.status(400).json({
         success: false,
@@ -140,7 +172,6 @@ exports.createInvoice = async (req, res) => {
       });
     }
 
-    // Validate and populate item details
     const populatedItems = [];
     for (const item of items) {
       const product = await Product.findById(item.product);
@@ -150,17 +181,10 @@ exports.createInvoice = async (req, res) => {
           message: `Product not found: ${item.product}`,
         });
       }
-
-      populatedItems.push({
-        product: product._id,
-        productName: product.name,
-        quantity: item.quantity,
-        rate: item.rate || product.price,
-        lineTotal: item.quantity * (item.rate || product.price),
-      });
+      populatedItems.push(buildInvoiceItem(product, item));
     }
 
-    // Create invoice
+    const status = reqStatus || 'draft';
     const invoice = await Invoice.create({
       quotation: quotation || undefined,
       customerName,
@@ -175,9 +199,16 @@ exports.createInvoice = async (req, res) => {
       taxRate: taxRate || 10,
       notes,
       terms,
-      status: status || 'draft',
+      status,
+      paymentMethod: paymentMethod || '',
+      amountPaid: amountPaid != null ? Number(amountPaid) : 0,
       createdBy: req.user.id,
     });
+
+    // Stock decrease only when status is confirmed or delivered
+    if (status === 'confirmed' || status === 'delivered') {
+      await decreaseStockForInvoice(invoice);
+    }
 
     const populatedInvoice = await Invoice.findById(invoice._id)
       .populate('createdBy', 'name email')
@@ -203,20 +234,14 @@ exports.createInvoice = async (req, res) => {
 // @access  Private
 exports.updateInvoice = async (req, res) => {
   try {
-    let invoice = await Invoice.findById(req.params.id);
-
+    const invoice = await Invoice.findById(req.params.id);
     if (!invoice) {
-      return res.status(404).json({
-        success: false,
-        message: 'Invoice not found',
-      });
+      return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
-
-    // Don't allow updating paid or cancelled invoices
-    if (invoice.status === 'paid' || invoice.status === 'cancelled') {
+    if (invoice.status === 'cancelled') {
       return res.status(400).json({
         success: false,
-        message: `Cannot update ${invoice.status} invoice`,
+        message: 'Cannot update cancelled invoice',
       });
     }
 
@@ -233,11 +258,16 @@ exports.updateInvoice = async (req, res) => {
       taxRate,
       notes,
       terms,
-      status,
+      status: newStatus,
+      paymentMethod,
+      amountPaid,
     } = req.body;
 
-    // If items are being updated, validate and populate
-    if (items && items.length > 0) {
+    const oldStatus = invoice.status;
+    const willConfirmOrDeliver = newStatus === 'confirmed' || newStatus === 'delivered';
+    const wasConfirmedOrDelivered = oldStatus === 'confirmed' || oldStatus === 'delivered';
+
+    if (items && items.length > 0 && oldStatus === 'draft') {
       const populatedItems = [];
       for (const item of items) {
         const product = await Product.findById(item.product);
@@ -247,19 +277,11 @@ exports.updateInvoice = async (req, res) => {
             message: `Product not found: ${item.product}`,
           });
         }
-
-        populatedItems.push({
-          product: product._id,
-          productName: product.name,
-          quantity: item.quantity,
-          rate: item.rate || product.price,
-          lineTotal: item.quantity * (item.rate || product.price),
-        });
+        populatedItems.push(buildInvoiceItem(product, item));
       }
       invoice.items = populatedItems;
     }
 
-    // Update fields
     if (customerName) invoice.customerName = customerName;
     if (customerPhone !== undefined) invoice.customerPhone = customerPhone;
     if (customerEmail !== undefined) invoice.customerEmail = customerEmail;
@@ -271,9 +293,26 @@ exports.updateInvoice = async (req, res) => {
     if (taxRate !== undefined) invoice.taxRate = taxRate;
     if (notes !== undefined) invoice.notes = notes;
     if (terms !== undefined) invoice.terms = terms;
-    if (status) invoice.status = status;
+    if (paymentMethod !== undefined) invoice.paymentMethod = paymentMethod;
+    if (amountPaid !== undefined) invoice.amountPaid = Number(amountPaid);
 
-    await invoice.save();
+    // Status change: stock only on confirmed/delivered
+    if (newStatus) {
+      if (willConfirmOrDeliver && !wasConfirmedOrDelivered) {
+        invoice.status = newStatus;
+        await invoice.save();
+        await decreaseStockForInvoice(invoice);
+      } else if (!willConfirmOrDeliver && wasConfirmedOrDelivered) {
+        await restoreStockForInvoice(invoice);
+        invoice.status = newStatus;
+        await invoice.save();
+      } else {
+        invoice.status = newStatus;
+        await invoice.save();
+      }
+    } else {
+      await invoice.save();
+    }
 
     const updatedInvoice = await Invoice.findById(invoice._id)
       .populate('createdBy', 'name email')
@@ -294,34 +333,22 @@ exports.updateInvoice = async (req, res) => {
   }
 };
 
-// @desc    Mark invoice as paid
+// @desc    Mark invoice as paid (update payment: amountPaid, paymentMethod)
 // @route   POST /api/invoices/:id/pay
 // @access  Private
 exports.markInvoiceAsPaid = async (req, res) => {
   try {
     const invoice = await Invoice.findById(req.params.id);
-
     if (!invoice) {
-      return res.status(404).json({
-        success: false,
-        message: 'Invoice not found',
-      });
-    }
-
-    if (invoice.status === 'paid') {
-      return res.status(400).json({
-        success: false,
-        message: 'Invoice is already paid',
-      });
+      return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
 
     const { paymentMethod, paidAmount, paidDate } = req.body;
+    const amount = paidAmount != null ? Number(paidAmount) : invoice.grandTotal;
 
-    invoice.status = 'paid';
-    invoice.paymentMethod = paymentMethod;
-    invoice.paidAmount = paidAmount || invoice.grandTotal;
-    invoice.paidDate = paidDate || Date.now();
-
+    invoice.paymentMethod = paymentMethod || invoice.paymentMethod || '';
+    invoice.amountPaid = amount;
+    invoice.paidDate = paidDate ? new Date(paidDate) : new Date();
     await invoice.save();
 
     const updatedInvoice = await Invoice.findById(invoice._id)
@@ -330,14 +357,14 @@ exports.markInvoiceAsPaid = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: 'Invoice marked as paid successfully',
+      message: 'Payment updated successfully',
       invoice: updatedInvoice,
     });
   } catch (error) {
     console.error('Mark invoice as paid error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error while marking invoice as paid',
+      message: 'Server error while updating payment',
       error: error.message,
     });
   }
@@ -351,17 +378,11 @@ exports.getInvoicePdf = async (req, res) => {
     const invoice = await Invoice.findById(req.params.id)
       .populate('quotation', 'quotationNumber')
       .lean();
-
     if (!invoice) {
-      return res.status(404).json({
-        success: false,
-        message: 'Invoice not found',
-      });
+      return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
-
     const pdfBuffer = await generateInvoicePdf(invoice);
     const filename = `invoice-${invoice.invoiceNumber || invoice._id}.pdf`.replace(/\s/g, '-');
-
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Length', pdfBuffer.length);
@@ -382,28 +403,17 @@ exports.getInvoicePdf = async (req, res) => {
 exports.deleteInvoice = async (req, res) => {
   try {
     const invoice = await Invoice.findById(req.params.id);
-
     if (!invoice) {
-      return res.status(404).json({
-        success: false,
-        message: 'Invoice not found',
-      });
+      return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
-
-    // Only allow deleting draft invoices
     if (invoice.status !== 'draft') {
       return res.status(400).json({
         success: false,
         message: 'Only draft invoices can be deleted',
       });
     }
-
     await invoice.deleteOne();
-
-    res.status(200).json({
-      success: true,
-      message: 'Invoice deleted successfully',
-    });
+    res.status(200).json({ success: true, message: 'Invoice deleted successfully' });
   } catch (error) {
     console.error('Delete invoice error:', error);
     res.status(500).json({
@@ -420,29 +430,21 @@ exports.deleteInvoice = async (req, res) => {
 exports.getInvoiceStats = async (req, res) => {
   try {
     const invoices = await Invoice.find();
-
-    const stats = {
-      totalInvoices: invoices.length,
-      draft: invoices.filter(inv => inv.status === 'draft').length,
-      sent: invoices.filter(inv => inv.status === 'sent').length,
-      paid: invoices.filter(inv => inv.status === 'paid').length,
-      overdue: invoices.filter(inv => inv.status === 'overdue').length,
-      cancelled: invoices.filter(inv => inv.status === 'cancelled').length,
-      totalRevenue: invoices
-        .filter(inv => inv.status === 'paid')
-        .reduce((sum, inv) => sum + inv.paidAmount, 0),
-      pendingAmount: invoices
-        .filter(inv => inv.status === 'sent' || inv.status === 'overdue')
-        .reduce((sum, inv) => sum + inv.grandTotal, 0),
-      overdueAmount: invoices
-        .filter(inv => inv.status === 'overdue')
-        .reduce((sum, inv) => sum + inv.grandTotal, 0),
-    };
-
-    res.status(200).json({
-      success: true,
-      stats,
+    const statuses = ['draft', 'confirmed', 'delivered', 'cancelled', 'sent', 'paid', 'overdue'];
+    const stats = { totalInvoices: invoices.length };
+    statuses.forEach(s => {
+      stats[s] = invoices.filter(inv => inv.status === s).length;
     });
+    stats.totalRevenue = invoices
+      .filter(inv => inv.paymentStatus === 'paid' || inv.status === 'paid')
+      .reduce((sum, inv) => sum + (inv.grandTotal || inv.paidAmount || 0), 0);
+    stats.pendingAmount = invoices
+      .filter(inv => inv.paymentStatus !== 'paid' && inv.status !== 'cancelled')
+      .reduce((sum, inv) => sum + (inv.remainingBalance || inv.grandTotal || 0), 0);
+    stats.overdueAmount = invoices
+      .filter(inv => inv.status === 'overdue')
+      .reduce((sum, inv) => sum + (inv.grandTotal || 0), 0);
+    res.status(200).json({ success: true, stats });
   } catch (error) {
     console.error('Get invoice stats error:', error);
     res.status(500).json({
