@@ -15,7 +15,7 @@ const stockTransactionSchema = new mongoose.Schema(
     quantity: {
       type: Number,
       required: [true, 'Please provide quantity'],
-      min: [1, 'Quantity must be at least 1'],
+      min: [0.01, 'Quantity must be greater than 0'],
     },
     previousStock: {
       type: Number,
