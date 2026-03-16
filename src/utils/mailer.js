@@ -21,6 +21,10 @@ function getSmtpConfig() {
     fromEmail: process.env.SMTP_FROM_EMAIL || user,
     fromName: process.env.SMTP_FROM_NAME || 'AMP Tiles',
     replyTo: process.env.SMTP_REPLY_TO || undefined,
+    family: Number(process.env.SMTP_FAMILY || 4),
+    connectionTimeout: Number(process.env.SMTP_CONNECTION_TIMEOUT || 20000),
+    greetingTimeout: Number(process.env.SMTP_GREETING_TIMEOUT || 15000),
+    socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT || 30000),
   };
 }
 
@@ -43,9 +47,16 @@ function getTransporter() {
     host: cfg.host,
     port: cfg.port,
     secure: cfg.secure,
+    family: cfg.family,
+    connectionTimeout: cfg.connectionTimeout,
+    greetingTimeout: cfg.greetingTimeout,
+    socketTimeout: cfg.socketTimeout,
     auth: {
       user: cfg.user,
       pass: cfg.pass,
+    },
+    tls: {
+      servername: cfg.host,
     },
   });
 
