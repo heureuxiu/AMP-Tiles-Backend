@@ -52,8 +52,6 @@ const quotationSchema = new mongoose.Schema(
   {
     quotationNumber: {
       type: String,
-      unique: true,
-      sparse: true, // Allow null values until generated
     },
     customerName: {
       type: String,
@@ -178,7 +176,7 @@ quotationSchema.pre('save', async function () {
 });
 
 // Index for better query performance
-quotationSchema.index({ quotationNumber: 1 });
+quotationSchema.index({ quotationNumber: 1 }, { unique: true, sparse: true });
 quotationSchema.index({ customerName: 'text' });
 quotationSchema.index({ status: 1, createdAt: -1 });
 quotationSchema.index({ createdBy: 1, createdAt: -1 });
