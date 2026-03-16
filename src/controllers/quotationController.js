@@ -592,7 +592,13 @@ exports.createQuotation = async (req, res) => {
           await quotation.populate('items.product', 'name sku');
         }
       } catch (error) {
-        emailError = error.message || 'Failed to send quotation email';
+        const parts = [
+          error?.message || 'Failed to send quotation email',
+          error?.code ? `code=${error.code}` : '',
+          error?.command ? `command=${error.command}` : '',
+          error?.responseCode ? `responseCode=${error.responseCode}` : '',
+        ].filter(Boolean);
+        emailError = parts.join(' | ');
       }
     }
 
