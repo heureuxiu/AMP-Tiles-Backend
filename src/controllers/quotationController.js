@@ -1,6 +1,12 @@
+const mongoose = require('mongoose');
 const Quotation = require('../models/Quotation');
 const Product = require('../models/Product');
 const Invoice = require('../models/Invoice');
+const { sendEmail } = require('../utils/mailer');
+const { buildQuotationEmail } = require('../utils/quotationEmail');
+
+const HOLDING_QUOTATION_STATUSES = ['sent', 'accepted'];
+const SQFT_PER_SQM = 10.764;
 
 // @desc    Get all quotations
 // @route   GET /api/quotations
@@ -96,11 +102,152 @@ exports.getQuotation = async (req, res) => {
   }
 };
 
+function normalizeCoverageUnit(rawUnit, pricingUnit) {
+  const normalized = String(rawUnit || '')
+    .toLowerCase()
+    .replace(/[\s._-]+/g, '');
+
+  if (
+    normalized.includes('sqm') ||
+    normalized.includes('sqmeter') ||
+    normalized.includes('sqmetre') ||
+    normalized.includes('m2') ||
+    normalized.includes('m²')
+  ) {
+    return 'sqm';
+  }
+
+  if (
+    normalized.includes('sqft') ||
+    normalized.includes('sqfeet') ||
+    normalized.includes('ft2') ||
+    normalized.includes('ft²')
+  ) {
+    return 'sqft';
+  }
+
+  if (pricingUnit === 'per_sqm') return 'sqm';
+  if (pricingUnit === 'per_sqft') return 'sqft';
+  return 'sqft';
+}
+
+function getSqmPerBox(product) {
+  const covPerBox = Number(product.coveragePerBox) || 0;
+  if (covPerBox <= 0) return 0;
+  const covUnit = normalizeCoverageUnit(
+    product.coveragePerBoxUnit,
+    product.pricingUnit
+  );
+  return covUnit === 'sqm' ? covPerBox : covPerBox / SQFT_PER_SQM;
+}
+
+function roundQty(value) {
+  return Math.round((Number(value) || 0) * 1000) / 1000;
+}
+
+function normalizeStockUnit(rawUnit, pricingUnit) {
+  const normalized = String(rawUnit || '')
+    .toLowerCase()
+    .replace(/[\s._-]+/g, '');
+
+  if (
+    normalized.includes('sqm') ||
+    normalized.includes('sqmeter') ||
+    normalized.includes('sqmetre') ||
+    normalized.includes('m2') ||
+    normalized.includes('m²')
+  ) {
+    return 'sqm';
+  }
+  if (
+    normalized.includes('sqft') ||
+    normalized.includes('sqfeet') ||
+    normalized.includes('ft2') ||
+    normalized.includes('ft²')
+  ) {
+    return 'sqft';
+  }
+  if (normalized.includes('piece')) return 'piece';
+  if (normalized.includes('box')) return 'box';
+
+  if (pricingUnit === 'per_sqm') return 'sqm';
+  if (pricingUnit === 'per_sqft') return 'sqft';
+  if (pricingUnit === 'per_piece') return 'piece';
+  return 'box';
+}
+
+function normalizeItemUnitType(rawUnitType) {
+  const normalized = String(rawUnitType || 'box')
+    .toLowerCase()
+    .replace(/[\s._-]+/g, '');
+  if (normalized.includes('sqmeter') || normalized.includes('sqm') || normalized.includes('m2') || normalized.includes('m²')) {
+    return 'sqm';
+  }
+  if (normalized.includes('sqfeet') || normalized.includes('sqft') || normalized.includes('ft2') || normalized.includes('ft²')) {
+    return 'sqft';
+  }
+  if (normalized.includes('piece')) return 'piece';
+  return 'box';
+}
+
+function getItemCoverageSqm(product, item) {
+  const explicitCoverageSqm = Number(item.coverageSqm);
+  if (explicitCoverageSqm > 0) return explicitCoverageSqm;
+
+  const quantity = Number(item.quantity) || 0;
+  const itemUnit = normalizeItemUnitType(item.unitType);
+  const sqmPerBox = getSqmPerBox(product);
+  const hasCoveragePerBox = sqmPerBox > 0;
+
+  if (itemUnit === 'box') {
+    return hasCoveragePerBox ? quantity * sqmPerBox : null;
+  }
+  if (itemUnit === 'sqm') {
+    return hasCoveragePerBox ? quantity * sqmPerBox : quantity;
+  }
+  if (itemUnit === 'sqft') {
+    return hasCoveragePerBox ? quantity * sqmPerBox : quantity / SQFT_PER_SQM;
+  }
+  return null;
+}
+
+function getItemStockDemand(product, item) {
+  const quantity = Number(item.quantity) || 0;
+  const stockUnit = normalizeStockUnit(product.unit, product.pricingUnit);
+  if (stockUnit === 'box' || stockUnit === 'piece') {
+    return quantity;
+  }
+
+  const coverageSqm = getItemCoverageSqm(product, item);
+  if (coverageSqm == null) {
+    return quantity;
+  }
+  if (stockUnit === 'sqm') {
+    return coverageSqm;
+  }
+  return coverageSqm * SQFT_PER_SQM;
+}
+
+function getProductIdFromItem(item) {
+  if (!item || !item.product) return '';
+  if (typeof item.product === 'object' && item.product._id) {
+    return String(item.product._id);
+  }
+  return String(item.product);
+}
+
+function formatStockQty(value) {
+  const rounded = roundQty(value);
+  if (Number.isInteger(rounded)) return String(rounded);
+  return rounded.toFixed(3).replace(/\.?0+$/, '');
+}
+
 // Helper to build one quotation item with discount/tax and optional tiles coverage
 function buildQuotationItem(product, item) {
   const quantity = Number(item.quantity) || 0;
   const rate = Number(item.rate) || product.retailPrice || product.price || 0;
   const unitType = item.unitType || 'Box';
+  const pricingUnit = product.pricingUnit || 'per_box';
   const discountPercent = Number(item.discountPercent) || 0;
   const taxPercent =
     item.taxPercent != null
@@ -109,7 +256,17 @@ function buildQuotationItem(product, item) {
       ? product.taxPercent
       : 0;
 
-  const base = quantity * rate;
+  const sqmPerBox = getSqmPerBox(product);
+  const coverageSqmFromBoxes = sqmPerBox > 0 ? quantity * sqmPerBox : null;
+
+  let billableQuantity = quantity;
+  if (pricingUnit === 'per_sqm' && coverageSqmFromBoxes != null) {
+    billableQuantity = coverageSqmFromBoxes;
+  } else if (pricingUnit === 'per_sqft' && coverageSqmFromBoxes != null) {
+    billableQuantity = coverageSqmFromBoxes * 10.764;
+  }
+
+  const base = billableQuantity * rate;
   const discountAmount = (base * discountPercent) / 100;
   const taxable = base - discountAmount;
   const taxAmount = (taxable * taxPercent) / 100;
@@ -117,16 +274,12 @@ function buildQuotationItem(product, item) {
 
   // Tiles coverage in sqm (optional)
   let coverageSqm = null;
-  const covPerBox = product.coveragePerBox;
-  const covUnit = (product.coveragePerBoxUnit || 'sqft').toLowerCase();
-  if (covPerBox != null && covPerBox > 0) {
-    if (unitType === 'Box') {
-      coverageSqm = covUnit === 'sqm' ? quantity * covPerBox : (quantity * covPerBox) / 10.764;
-    } else if (unitType === 'Sq Meter') {
-      coverageSqm = quantity;
-    } else if (unitType === 'Sq Ft') {
-      coverageSqm = quantity / 10.764;
-    }
+  if (coverageSqmFromBoxes != null) {
+    coverageSqm = coverageSqmFromBoxes;
+  } else if (unitType === 'Sq Meter') {
+    coverageSqm = quantity;
+  } else if (unitType === 'Sq Ft') {
+    coverageSqm = quantity / 10.764;
   }
 
   return {
@@ -145,6 +298,180 @@ function buildQuotationItem(product, item) {
     discountAmount,
     taxAmount,
   };
+}
+
+function createStockValidationError(message, statusCode = 400) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function isOwnStockProduct(product) {
+  return String(product?.supplierType || 'own') === 'own';
+}
+
+function isHoldingQuotationStatus(status) {
+  return HOLDING_QUOTATION_STATUSES.includes(String(status || '').toLowerCase());
+}
+
+function toObjectIds(ids) {
+  return ids
+    .filter((id) => mongoose.Types.ObjectId.isValid(String(id)))
+    .map((id) => new mongoose.Types.ObjectId(String(id)));
+}
+
+async function getHeldQuantitiesByProduct(productIds, options = {}) {
+  const { excludeQuotationId } = options;
+  const objectIds = toObjectIds(productIds);
+  if (objectIds.length === 0) return new Map();
+
+  const query = {
+    status: { $in: HOLDING_QUOTATION_STATUSES },
+    'items.product': { $in: objectIds },
+  };
+
+  if (excludeQuotationId && mongoose.Types.ObjectId.isValid(String(excludeQuotationId))) {
+    query._id = { $ne: new mongoose.Types.ObjectId(String(excludeQuotationId)) };
+  }
+
+  const quotations = await Quotation.find(query)
+    .select('items')
+    .populate('items.product', 'unit coveragePerBox coveragePerBoxUnit pricingUnit');
+
+  const targetIds = new Set(objectIds.map((id) => String(id)));
+  const heldByProduct = new Map();
+
+  for (const quotation of quotations) {
+    for (const item of quotation.items || []) {
+      const productId = getProductIdFromItem(item);
+      if (!productId || !targetIds.has(productId)) continue;
+      if (!item.product || typeof item.product !== 'object') continue;
+
+      const heldDemand = roundQty(getItemStockDemand(item.product, item));
+      if (heldDemand <= 0) continue;
+      heldByProduct.set(
+        productId,
+        roundQty((heldByProduct.get(productId) || 0) + heldDemand)
+      );
+    }
+  }
+
+  return heldByProduct;
+}
+
+async function assertRequestedStockAvailability(requestedByProduct, productMap, options = {}) {
+  const heldByProduct = await getHeldQuantitiesByProduct(
+    Array.from(requestedByProduct.keys()),
+    options
+  );
+
+  for (const [productId, requestedQty] of requestedByProduct.entries()) {
+    const product = productMap.get(productId);
+
+    if (!product) {
+      throw createStockValidationError(`Product not found: ${productId}`, 404);
+    }
+
+    if (!isOwnStockProduct(product)) {
+      continue;
+    }
+
+    const onHandQty = roundQty(product.stock);
+    const heldQty = roundQty(heldByProduct.get(productId));
+    const availableQty = roundQty(Math.max(0, onHandQty - heldQty));
+
+    if (requestedQty > availableQty + 0.0001) {
+      const unitLabel = product.unit || 'units';
+      throw createStockValidationError(
+        `Insufficient stock for ${product.name}. On hand: ${formatStockQty(onHandQty)} ${unitLabel}, Held in quotations: ${formatStockQty(heldQty)} ${unitLabel}, Available: ${formatStockQty(availableQty)} ${unitLabel}, Requested: ${formatStockQty(requestedQty)} ${unitLabel}`,
+        400
+      );
+    }
+  }
+}
+
+async function validateStockAndLoadProducts(items, options = {}) {
+  const requestedRows = [];
+  const productIds = [];
+
+  for (const item of items) {
+    const productId = getProductIdFromItem(item);
+    const quantity = Number(item.quantity) || 0;
+
+    if (!productId) {
+      throw createStockValidationError('Please provide a product for each item', 400);
+    }
+
+    if (quantity <= 0) {
+      throw createStockValidationError('Quantity must be greater than 0', 400);
+    }
+
+    requestedRows.push({ productId, item });
+    productIds.push(productId);
+  }
+
+  const products = await Product.find({ _id: { $in: Array.from(new Set(productIds)) } });
+  const productMap = new Map(products.map((product) => [String(product._id), product]));
+  const requestedByProduct = new Map();
+
+  for (const row of requestedRows) {
+    const product = productMap.get(row.productId);
+    if (!product) {
+      throw createStockValidationError(`Product not found: ${row.productId}`, 404);
+    }
+    const requestedDemand = roundQty(getItemStockDemand(product, row.item));
+    if (requestedDemand <= 0) continue;
+    requestedByProduct.set(
+      row.productId,
+      roundQty((requestedByProduct.get(row.productId) || 0) + requestedDemand)
+    );
+  }
+
+  await assertRequestedStockAvailability(requestedByProduct, productMap, options);
+
+  return productMap;
+}
+
+async function consumeOwnStockForItems(items, options = {}) {
+  const productIds = [];
+  for (const item of items) {
+    const productId = getProductIdFromItem(item);
+    if (!productId) continue;
+    productIds.push(productId);
+  }
+
+  if (productIds.length === 0) return;
+
+  const products = await Product.find({ _id: { $in: Array.from(new Set(productIds)) } });
+  const productMap = new Map(products.map((product) => [String(product._id), product]));
+  const requestedByProduct = new Map();
+
+  for (const item of items) {
+    const productId = getProductIdFromItem(item);
+    const quantity = Number(item.quantity) || 0;
+    if (!productId || quantity <= 0) continue;
+    const product = productMap.get(productId);
+    if (!product) continue;
+    const stockDemand = roundQty(getItemStockDemand(product, item));
+    if (stockDemand <= 0) continue;
+    requestedByProduct.set(
+      productId,
+      roundQty((requestedByProduct.get(productId) || 0) + stockDemand)
+    );
+  }
+
+  if (requestedByProduct.size === 0) return;
+
+  await assertRequestedStockAvailability(requestedByProduct, productMap, options);
+
+  for (const [productId, quantity] of requestedByProduct.entries()) {
+    const product = productMap.get(productId);
+    if (!product || !isOwnStockProduct(product)) continue;
+    const nextStock = roundQty((Number(product.stock) || 0) - quantity);
+    product.stock = Math.max(0, nextStock);
+    // eslint-disable-next-line no-await-in-loop
+    await product.save();
+  }
 }
 
 // @desc    Create new quotation
@@ -166,6 +493,7 @@ exports.createQuotation = async (req, res) => {
       notes,
       terms,
       status,
+      sendEmail: shouldSendEmail,
     } = req.body;
 
     // Validate items
@@ -176,19 +504,21 @@ exports.createQuotation = async (req, res) => {
       });
     }
 
+    if (shouldSendEmail && !String(customerEmail || '').trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Customer email is required to send quotation by email',
+      });
+    }
+
     // Validate and populate items (with discount / tax per line)
+    const productMap = await validateStockAndLoadProducts(items);
     const populatedItems = [];
     let subtotal = 0;
     let totalDiscount = 0;
     let totalTax = 0;
     for (const item of items) {
-      const product = await Product.findById(item.product);
-      if (!product) {
-        return res.status(404).json({
-          success: false,
-          message: `Product not found: ${item.product}`,
-        });
-      }
+      const product = productMap.get(String(item.product));
 
       const built = buildQuotationItem(product, item);
       populatedItems.push(built.populated);
@@ -224,12 +554,42 @@ exports.createQuotation = async (req, res) => {
     await quotation.populate('createdBy', 'name email');
     await quotation.populate('items.product', 'name sku');
 
+    let emailSent = false;
+    let emailError = null;
+    if (shouldSendEmail) {
+      try {
+        const emailPayload = buildQuotationEmail(quotation);
+        await sendEmail({
+          to: quotation.customerEmail,
+          subject: emailPayload.subject,
+          text: emailPayload.text,
+          html: emailPayload.html,
+        });
+        emailSent = true;
+
+        if (quotation.status === 'draft') {
+          quotation.status = 'sent';
+          await quotation.save();
+          await quotation.populate('createdBy', 'name email');
+          await quotation.populate('items.product', 'name sku');
+        }
+      } catch (error) {
+        emailError = error.message || 'Failed to send quotation email';
+      }
+    }
+
     res.status(201).json({
       success: true,
+      message:
+        shouldSendEmail && !emailSent
+          ? 'Quotation created, but email could not be sent'
+          : undefined,
       quotation,
+      emailSent,
+      emailError,
     });
   } catch (error) {
-    res.status(400).json({
+    res.status(error.statusCode || 400).json({
       success: false,
       message: error.message,
     });
@@ -274,20 +634,31 @@ exports.updateQuotation = async (req, res) => {
       status,
     } = req.body;
 
+    const nextStatus = status || quotation.status;
+    const shouldValidateStock =
+      (items && items.length > 0) || (status && isHoldingQuotationStatus(nextStatus));
+    let validatedProductMap = null;
+
+    if (shouldValidateStock) {
+      const itemsToValidate = items && items.length > 0 ? items : quotation.items;
+      validatedProductMap = await validateStockAndLoadProducts(itemsToValidate, {
+        excludeQuotationId: quotation._id,
+      });
+    }
+
     // If items are being updated, recalculate totals
     if (items && items.length > 0) {
+      const productMap =
+        validatedProductMap ||
+        (await validateStockAndLoadProducts(items, {
+          excludeQuotationId: quotation._id,
+        }));
       const populatedItems = [];
       let subtotal = 0;
       let totalDiscount = 0;
       let totalTax = 0;
       for (const item of items) {
-        const product = await Product.findById(item.product);
-        if (!product) {
-          return res.status(404).json({
-            success: false,
-            message: `Product not found: ${item.product}`,
-          });
-        }
+        const product = productMap.get(String(item.product));
 
         const built = buildQuotationItem(product, item);
         populatedItems.push(built.populated);
@@ -329,7 +700,7 @@ exports.updateQuotation = async (req, res) => {
       quotation,
     });
   } catch (error) {
-    res.status(400).json({
+    res.status(error.statusCode || 400).json({
       success: false,
       message: error.message,
     });
@@ -395,10 +766,17 @@ exports.convertToInvoice = async (req, res) => {
     const invoiceItems = quotation.items.map((item) => ({
       product: item.product._id || item.product,
       productName: item.productName || (item.product && item.product.name) || 'Product',
+      unitType: item.unitType || 'Box',
       quantity: item.quantity,
       rate: item.rate,
+      discountPercent: item.discountPercent || 0,
+      taxPercent: item.taxPercent || 0,
       lineTotal: item.lineTotal,
+      coverageSqm: item.coverageSqm,
     }));
+
+    // Reduce only own stock and ignore this quotation's own reservation while converting.
+    await consumeOwnStockForItems(invoiceItems, { excludeQuotationId: quotation._id });
 
     // Create actual Invoice from quotation data
     const invoice = await Invoice.create({
@@ -415,7 +793,7 @@ exports.convertToInvoice = async (req, res) => {
       taxRate: quotation.taxRate || 10,
       notes: quotation.notes,
       terms: quotation.terms,
-      status: 'draft',
+      status: 'confirmed',
       createdBy: req.user.id,
     });
 
