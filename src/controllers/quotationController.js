@@ -2,8 +2,26 @@ const mongoose = require('mongoose');
 const Quotation = require('../models/Quotation');
 const Product = require('../models/Product');
 const Invoice = require('../models/Invoice');
-const { sendEmail } = require('../utils/mailer');
-const { buildQuotationEmail } = require('../utils/quotationEmail');
+let sendEmail = async () => {
+  throw new Error('Email service is not available');
+};
+let buildQuotationEmail = (quotation) => ({
+  subject: `Quotation ${quotation?.quotationNumber || ''} from AMP Tiles`,
+  text: 'Please find your quotation details attached in dashboard.',
+  html: '<p>Please find your quotation details attached in dashboard.</p>',
+});
+
+try {
+  ({ sendEmail } = require('../utils/mailer'));
+} catch (error) {
+  console.warn('Mailer utility not found. Email sending will be disabled.', error.message);
+}
+
+try {
+  ({ buildQuotationEmail } = require('../utils/quotationEmail'));
+} catch (error) {
+  console.warn('Quotation email template utility not found. Using fallback template.', error.message);
+}
 
 const HOLDING_QUOTATION_STATUSES = ['sent', 'accepted'];
 const SQFT_PER_SQM = 10.764;
