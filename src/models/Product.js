@@ -93,6 +93,11 @@ const productSchema = new mongoose.Schema(
       min: 0,
       default: null,
     },
+    builderPrice: {
+      type: Number,
+      min: 0,
+      default: null,
+    },
     taxPercent: {
       type: Number,
       min: 0,
