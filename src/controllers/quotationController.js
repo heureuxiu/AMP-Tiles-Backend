@@ -11,16 +11,38 @@ let buildQuotationEmail = (quotation) => ({
   html: '<p>Please find your quotation details attached in dashboard.</p>',
 });
 
-try {
-  ({ sendEmail } = require('../utils/mailer'));
-} catch (error) {
-  console.warn('Mailer utility not found. Email sending will be disabled.', error.message);
+function loadOptionalModule(candidates) {
+  for (const mod of candidates) {
+    try {
+      return require(mod);
+    } catch (error) {
+      if (error && error.code !== 'MODULE_NOT_FOUND') {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn(`Failed loading optional module "${mod}"`, error.message);
+        }
+        return null;
+      }
+    }
+  }
+  return null;
 }
 
-try {
-  ({ buildQuotationEmail } = require('../utils/quotationEmail'));
-} catch (error) {
-  console.warn('Quotation email template utility not found. Using fallback template.', error.message);
+const mailerModule = loadOptionalModule(['../utils/mailer']);
+if (mailerModule && typeof mailerModule.sendEmail === 'function') {
+  ({ sendEmail } = mailerModule);
+} else if (process.env.NODE_ENV !== 'production') {
+  console.warn('Mailer utility not found. Email sending will be disabled.');
+}
+
+const quotationEmailModule = loadOptionalModule([
+  '../utils/quotationEmail',
+  '../utils/quotation-email',
+  '../utils/QuotationEmail',
+]);
+if (quotationEmailModule && typeof quotationEmailModule.buildQuotationEmail === 'function') {
+  ({ buildQuotationEmail } = quotationEmailModule);
+} else if (process.env.NODE_ENV !== 'production') {
+  console.warn('Quotation email template utility not found. Using fallback template.');
 }
 
 const HOLDING_QUOTATION_STATUSES = ['sent', 'accepted'];
