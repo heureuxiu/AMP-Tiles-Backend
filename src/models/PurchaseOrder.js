@@ -12,7 +12,7 @@ const purchaseOrderItemSchema = new mongoose.Schema(
     unitType: {
       type: String,
       required: true,
-      enum: ['Box', 'Sq Ft', 'Piece', 'Pallet'],
+      enum: ['Box', 'Sq Ft', 'Sqm', 'Piece', 'Pallet'],
       default: 'Box',
     },
     quantityOrdered: {
@@ -49,8 +49,6 @@ const purchaseOrderSchema = new mongoose.Schema(
   {
     poNumber: {
       type: String,
-      unique: true,
-      sparse: true,
     },
     supplier: {
       type: mongoose.Schema.Types.ObjectId,
@@ -134,7 +132,7 @@ purchaseOrderSchema.pre('save', function () {
   }
 });
 
-purchaseOrderSchema.index({ poNumber: 1 });
+purchaseOrderSchema.index({ poNumber: 1 }, { unique: true, sparse: true });
 purchaseOrderSchema.index({ supplier: 1 });
 purchaseOrderSchema.index({ status: 1 });
 purchaseOrderSchema.index({ poDate: -1 });
