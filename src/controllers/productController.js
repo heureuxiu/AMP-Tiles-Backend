@@ -1,11 +1,24 @@
 const Product = require('../models/Product');
 
+function isSqmUnit(unit) {
+  return String(unit || '')
+    .trim()
+    .toLowerCase() === 'sqm';
+}
+
+function normalizeStockByUnit(value, unit) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) return 0;
+  if (isSqmUnit(unit)) return Math.round(numericValue * 100) / 100;
+  return Math.floor(numericValue);
+}
+
 // @desc    Get all products
 // @route   GET /api/products
 // @access  Private
 exports.getProducts = async (req, res) => {
   try {
-    const { search, category, finish, status } = req.query;
+    const { search, category, finish, status, supplierName } = req.query;
     
     // Build query
     const query = {};
@@ -27,6 +40,11 @@ exports.getProducts = async (req, res) => {
     // Filter by finish
     if (finish) {
       query.finish = finish;
+    }
+
+    // Filter by supplier name
+    if (supplierName) {
+      query.supplierName = { $regex: supplierName, $options: 'i' };
     }
     
     // Filter by status (in stock, low stock, out of stock)
@@ -103,6 +121,10 @@ exports.createProduct = async (req, res) => {
       req.body.supplierName = '';
     }
 
+    if (req.body.stock !== undefined) {
+      req.body.stock = normalizeStockByUnit(req.body.stock, req.body.unit || 'boxes');
+    }
+
     // Check if SKU already exists
     const existingProduct = await Product.findOne({ sku: req.body.sku });
     if (existingProduct) {
@@ -149,6 +171,13 @@ exports.updateProduct = async (req, res) => {
     }
     if (req.body.supplierType === 'own') {
       req.body.supplierName = '';
+    }
+
+    if (req.body.stock !== undefined || req.body.unit !== undefined) {
+      const nextUnit = req.body.unit !== undefined ? req.body.unit : product.unit;
+      const nextStock =
+        req.body.stock !== undefined ? req.body.stock : product.stock;
+      req.body.stock = normalizeStockByUnit(nextStock, nextUnit);
     }
 
     // Check if SKU is being updated and if it already exists
