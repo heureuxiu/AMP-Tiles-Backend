@@ -91,6 +91,7 @@ const purchaseOrderSchema = new mongoose.Schema(
       ],
       default: 'draft',
     },
+    receivedDate: { type: Date, default: null },
     notes: { type: String, trim: true, default: '' },
     terms: { type: String, trim: true, default: '' },
     createdBy: {
