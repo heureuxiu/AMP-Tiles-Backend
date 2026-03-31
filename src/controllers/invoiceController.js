@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Invoice = require('../models/Invoice');
 const Product = require('../models/Product');
 const Quotation = require('../models/Quotation');
+const StockTransaction = require('../models/StockTransaction');
 const { generateInvoicePdf } = require('../utils/invoicePdf');
 
 const HOLDING_QUOTATION_STATUSES = ['sent', 'accepted'];
@@ -9,6 +10,18 @@ const SQFT_PER_SQM = 10.764;
 
 function roundQty(value) {
   return Math.round((Number(value) || 0) * 1000) / 1000;
+}
+
+function pickFirstFiniteNumber(values, fallback = 0) {
+  for (const value of values) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+  }
+  return fallback;
+}
+
+function roundMoney(value) {
+  return Math.round(pickFirstFiniteNumber([value], 0) * 100) / 100;
 }
 
 function formatStockQty(value) {
@@ -146,10 +159,12 @@ function getItemStockDemand(product, item) {
 
 // Build one invoice line item with line total and optional coverage (tiles)
 function buildInvoiceItem(product, item) {
-  const quantity = Number(item.quantity) || 0;
-  const rate = Number(item.rate) ?? product.retailPrice ?? product.price ?? 0;
-  const discountPercent = Number(item.discountPercent) || 0;
-  const taxPercent = Number(item.taxPercent) ?? product.taxPercent ?? 0;
+  const quantity = pickFirstFiniteNumber([item.quantity], 0);
+  const rate = roundMoney(
+    pickFirstFiniteNumber([item.rate, product.retailPrice, product.price], 0)
+  );
+  const discountPercent = pickFirstFiniteNumber([item.discountPercent], 0);
+  const taxPercent = pickFirstFiniteNumber([item.taxPercent, product.taxPercent], 0);
   const unitType = item.unitType || 'Box';
 
   const base = quantity * rate;
@@ -305,22 +320,62 @@ async function assertStockAvailabilityForItems(items, options = {}) {
   return { requestedByProduct, productMap };
 }
 
+async function createInvoiceStockTransaction({
+  productId,
+  type,
+  quantity,
+  previousStock,
+  newStock,
+  invoice,
+  createdBy,
+  remarks,
+}) {
+  if (!createdBy) return;
+  const invoiceRef = invoice?.invoiceNumber || String(invoice?._id || '');
+  await StockTransaction.create({
+    product: productId,
+    type,
+    quantity,
+    previousStock,
+    newStock,
+    remarks,
+    sourceType: 'invoice',
+    sourceId: String(invoice?._id || ''),
+    sourceRef: invoiceRef,
+    createdBy,
+  });
+}
+
 // Decrease stock for own-stock invoice items (when confirming/delivering)
 async function decreaseStockForInvoice(invoice, options = {}) {
+  const { actorId } = options;
   const { requestedByProduct, productMap } = await assertStockAvailabilityForItems(invoice.items, options);
 
   for (const [productId, qty] of requestedByProduct.entries()) {
     const product = productMap.get(productId);
     if (!product || !isOwnStockProduct(product)) continue;
+    const previousStock = roundQty(Number(product.stock) || 0);
     const nextStock = roundQty((Number(product.stock) || 0) - qty);
     product.stock = Math.max(0, nextStock);
     // eslint-disable-next-line no-await-in-loop
     await product.save();
+    // eslint-disable-next-line no-await-in-loop
+    await createInvoiceStockTransaction({
+      productId: product._id,
+      type: 'stock-out',
+      quantity: qty,
+      previousStock,
+      newStock: product.stock,
+      invoice,
+      createdBy: actorId,
+      remarks: `Invoice ${invoice.invoiceNumber || invoice._id} stock deducted`,
+    });
   }
 }
 
 // Restore stock when reverting from confirmed/delivered to draft
-async function restoreStockForInvoice(invoice) {
+async function restoreStockForInvoice(invoice, options = {}) {
+  const { actorId, reason } = options;
   const productIds = [];
   for (const item of invoice.items || []) {
     const productId = getProductIdFromItem(item);
@@ -338,9 +393,21 @@ async function restoreStockForInvoice(invoice) {
   for (const [productId, qty] of requestedByProduct.entries()) {
     const product = productMap.get(productId);
     if (!product || !isOwnStockProduct(product)) continue;
+    const previousStock = roundQty(Number(product.stock) || 0);
     product.stock = roundQty((Number(product.stock) || 0) + qty);
     // eslint-disable-next-line no-await-in-loop
     await product.save();
+    // eslint-disable-next-line no-await-in-loop
+    await createInvoiceStockTransaction({
+      productId: product._id,
+      type: 'stock-in',
+      quantity: qty,
+      previousStock,
+      newStock: product.stock,
+      invoice,
+      createdBy: actorId,
+      remarks: `Invoice ${invoice.invoiceNumber || invoice._id} stock restored${reason ? ` (${reason})` : ''}`,
+    });
   }
 }
 
@@ -482,14 +549,14 @@ exports.createInvoice = async (req, res) => {
       invoiceDate: invoiceDate || Date.now(),
       dueDate,
       items: populatedItems,
-      discount: discount || 0,
+      discount: pickFirstFiniteNumber([discount], 0),
       discountType: discountType || 'percentage',
-      taxRate: taxRate || 10,
+      taxRate: pickFirstFiniteNumber([taxRate], 10),
       notes,
       terms,
       status,
       paymentMethod: paymentMethod || '',
-      amountPaid: amountPaid != null ? Number(amountPaid) : 0,
+      amountPaid: pickFirstFiniteNumber([amountPaid], 0),
       createdBy: req.user.id,
     });
 
@@ -497,6 +564,7 @@ exports.createInvoice = async (req, res) => {
     if (shouldDeductStock) {
       await decreaseStockForInvoice(invoice, {
         excludeQuotationId: linkedQuotationId,
+        actorId: req.user.id,
       });
     }
 
@@ -578,13 +646,19 @@ exports.updateInvoice = async (req, res) => {
     if (customerAddress !== undefined) invoice.customerAddress = customerAddress;
     if (invoiceDate) invoice.invoiceDate = invoiceDate;
     if (dueDate !== undefined) invoice.dueDate = dueDate;
-    if (discount !== undefined) invoice.discount = discount;
+    if (discount !== undefined) {
+      invoice.discount = pickFirstFiniteNumber([discount], invoice.discount || 0);
+    }
     if (discountType) invoice.discountType = discountType;
-    if (taxRate !== undefined) invoice.taxRate = taxRate;
+    if (taxRate !== undefined) {
+      invoice.taxRate = pickFirstFiniteNumber([taxRate], invoice.taxRate || 0);
+    }
     if (notes !== undefined) invoice.notes = notes;
     if (terms !== undefined) invoice.terms = terms;
     if (paymentMethod !== undefined) invoice.paymentMethod = paymentMethod;
-    if (amountPaid !== undefined) invoice.amountPaid = Number(amountPaid);
+    if (amountPaid !== undefined) {
+      invoice.amountPaid = pickFirstFiniteNumber([amountPaid], invoice.amountPaid || 0);
+    }
 
     // Status change: stock only on confirmed/delivered
     if (newStatus) {
@@ -593,9 +667,13 @@ exports.updateInvoice = async (req, res) => {
         await invoice.save();
         await decreaseStockForInvoice(invoice, {
           excludeQuotationId: invoice.quotation,
+          actorId: req.user.id,
         });
       } else if (!willConfirmOrDeliver && wasConfirmedOrDelivered) {
-        await restoreStockForInvoice(invoice);
+        await restoreStockForInvoice(invoice, {
+          actorId: req.user.id,
+          reason: `status changed to ${newStatus}`,
+        });
         invoice.status = newStatus;
         await invoice.save();
       } else {
@@ -636,7 +714,9 @@ exports.markInvoiceAsPaid = async (req, res) => {
     }
 
     const { paymentMethod, paidAmount, paidDate } = req.body;
-    const amount = paidAmount != null ? Number(paidAmount) : invoice.grandTotal;
+    const amount = paidAmount != null
+      ? pickFirstFiniteNumber([paidAmount], invoice.grandTotal || 0)
+      : invoice.grandTotal;
 
     invoice.paymentMethod = paymentMethod || invoice.paymentMethod || '';
     invoice.amountPaid = amount;
