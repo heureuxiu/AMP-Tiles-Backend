@@ -40,6 +40,11 @@ const productSchema = new mongoose.Schema(
       enum: { values: ['third-party', 'own'], message: 'Supplier type must be Third-Party or Own' },
       trim: true,
     },
+    supplier: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Supplier',
+      default: null,
+    },
     supplierVendor: {
       type: String,
       trim: true,
@@ -159,5 +164,6 @@ productSchema.pre('save', function (next) {
 
 // Index for better search performance
 productSchema.index({ name: 'text', sku: 'text', category: 'text' });
+productSchema.index({ supplier: 1 });
 
 module.exports = mongoose.model('Product', productSchema);
