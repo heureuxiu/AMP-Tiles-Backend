@@ -84,7 +84,7 @@ exports.getTransaction = async (req, res) => {
 // @access  Private
 exports.updateStock = async (req, res) => {
   try {
-    const { productId, type, quantity, remarks } = req.body;
+    const { productId, type, quantity, sqrMtr, remarks, sourceRef } = req.body;
 
     // Validation
     if (!productId || !type || !quantity) {
@@ -101,10 +101,23 @@ exports.updateStock = async (req, res) => {
       });
     }
 
-    if (quantity < 1) {
+    const parsedQuantity = Number(quantity);
+    if (!Number.isFinite(parsedQuantity) || parsedQuantity <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'Quantity must be at least 1',
+        message: 'Quantity must be greater than 0',
+      });
+    }
+
+    const isSquareMeterTxn = sqrMtr != null;
+    const normalizedQuantity = isSquareMeterTxn
+      ? Math.round(parsedQuantity * 100) / 100
+      : Math.floor(parsedQuantity);
+
+    if (normalizedQuantity <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Quantity must be greater than 0',
       });
     }
 
@@ -123,16 +136,16 @@ exports.updateStock = async (req, res) => {
 
     // Calculate new stock
     if (type === 'stock-in') {
-      newStock = previousStock + quantity;
+      newStock = previousStock + normalizedQuantity;
     } else {
       // stock-out
-      if (previousStock < quantity) {
+      if (previousStock < normalizedQuantity) {
         return res.status(400).json({
           success: false,
-          message: `Insufficient stock. Available: ${previousStock}, Requested: ${quantity}`,
+          message: `Insufficient stock. Available: ${previousStock}, Requested: ${normalizedQuantity}`,
         });
       }
-      newStock = previousStock - quantity;
+      newStock = previousStock - normalizedQuantity;
     }
 
     // Update product stock
@@ -143,10 +156,12 @@ exports.updateStock = async (req, res) => {
     const transaction = await StockTransaction.create({
       product: productId,
       type,
-      quantity,
+      quantity: normalizedQuantity,
       previousStock,
       newStock,
       remarks: remarks || '',
+      sourceType: 'manual',
+      sourceRef: sourceRef ? String(sourceRef) : '',
       createdBy: req.user.id,
     });
 
