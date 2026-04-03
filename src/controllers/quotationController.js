@@ -167,6 +167,7 @@ if (quotationEmailModule && typeof quotationEmailModule.buildQuotationEmail === 
 }
 
 const HOLDING_QUOTATION_STATUSES = ['sent', 'accepted'];
+const CONVERTIBLE_QUOTATION_STATUSES = ['draft', 'sent', 'accepted'];
 const SQFT_PER_SQM = 10.764;
 
 // @desc    Get all quotations
@@ -214,6 +215,8 @@ exports.getQuotations = async (req, res) => {
       total: quotations.length,
       draft: quotations.filter(q => q.status === 'draft').length,
       sent: quotations.filter(q => q.status === 'sent').length,
+      accepted: quotations.filter(q => q.status === 'accepted').length,
+      rejected: quotations.filter(q => q.status === 'rejected').length,
       converted: quotations.filter(q => q.status === 'converted').length,
       expired: quotations.filter(q => q.status === 'expired').length,
       cancelled: quotations.filter(q => q.status === 'cancelled').length,
@@ -408,6 +411,7 @@ function buildQuotationItem(product, item) {
   const quantity = Number(item.quantity) || 0;
   const rate = Number(item.rate) || product.retailPrice || product.price || 0;
   const unitType = item.unitType || 'Box';
+  const explicitCoverageSqm = Number(item.coverageSqm);
   const pricingUnit = product.pricingUnit || 'per_box';
   const discountPercent = Number(item.discountPercent) || 0;
   const taxPercent =
@@ -435,7 +439,9 @@ function buildQuotationItem(product, item) {
 
   // Tiles coverage in sqm (optional)
   let coverageSqm = null;
-  if (coverageSqmFromBoxes != null) {
+  if (Number.isFinite(explicitCoverageSqm) && explicitCoverageSqm > 0) {
+    coverageSqm = explicitCoverageSqm;
+  } else if (coverageSqmFromBoxes != null) {
     coverageSqm = coverageSqmFromBoxes;
   } else if (unitType === 'Sq Meter') {
     coverageSqm = quantity;
@@ -473,6 +479,10 @@ function isOwnStockProduct(product) {
 
 function isHoldingQuotationStatus(status) {
   return HOLDING_QUOTATION_STATUSES.includes(String(status || '').toLowerCase());
+}
+
+function isConvertibleQuotationStatus(status) {
+  return CONVERTIBLE_QUOTATION_STATUSES.includes(String(status || '').toLowerCase());
 }
 
 function toObjectIds(ids) {
@@ -802,6 +812,15 @@ exports.updateQuotation = async (req, res) => {
     } = req.body;
 
     const nextStatus = status || quotation.status;
+
+    if (status === 'converted') {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Cannot set quotation status to converted directly. Use the convert action to create an invoice.',
+      });
+    }
+
     const shouldValidateStock =
       (items && items.length > 0) || (status && isHoldingQuotationStatus(nextStatus));
     let validatedProductMap = null;
@@ -922,10 +941,23 @@ exports.convertToInvoice = async (req, res) => {
       });
     }
 
-    if (quotation.status === 'converted') {
+    if (
+      quotation.status === 'converted' &&
+      (quotation.convertedToInvoice || quotation.invoiceId)
+    ) {
       return res.status(400).json({
         success: false,
         message: 'Quotation already converted to invoice',
+      });
+    }
+
+    const statusForConversion =
+      quotation.status === 'converted' ? 'accepted' : quotation.status;
+
+    if (!isConvertibleQuotationStatus(statusForConversion)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot convert quotation in "${quotation.status}" status. Set it to accepted first.`,
       });
     }
 
@@ -955,9 +987,11 @@ exports.convertToInvoice = async (req, res) => {
       invoiceDate: quotation.quotationDate || new Date(),
       dueDate: quotation.validUntil,
       items: invoiceItems,
-      discount: quotation.discount || 0,
-      discountType: quotation.discountType || 'fixed',
-      taxRate: quotation.taxRate || 10,
+      // Quotation line items already include discount and tax in lineTotal.
+      // Keep invoice-level discount/tax neutral to prevent double-application.
+      discount: 0,
+      discountType: 'fixed',
+      taxRate: 0,
       notes: quotation.notes,
       terms: quotation.terms,
       status: 'confirmed',
@@ -1009,6 +1043,8 @@ exports.getQuotationStats = async (req, res) => {
     const statusStats = {
       draft: { count: 0, totalValue: 0 },
       sent: { count: 0, totalValue: 0 },
+      accepted: { count: 0, totalValue: 0 },
+      rejected: { count: 0, totalValue: 0 },
       converted: { count: 0, totalValue: 0 },
       expired: { count: 0, totalValue: 0 },
       cancelled: { count: 0, totalValue: 0 },
