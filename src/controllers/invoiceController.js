@@ -157,6 +157,21 @@ function getItemStockDemand(product, item) {
   return coverageSqm * SQFT_PER_SQM;
 }
 
+function getBillableQuantity(product, item) {
+  const quantity = pickFirstFiniteNumber([item.quantity], 0);
+  const pricingUnit = product.pricingUnit || 'per_box';
+  const sqmPerBox = getSqmPerBox(product);
+  const coverageSqmFromBoxes = sqmPerBox > 0 ? quantity * sqmPerBox : null;
+
+  if (pricingUnit === 'per_sqm' && coverageSqmFromBoxes != null) {
+    return coverageSqmFromBoxes;
+  }
+  if (pricingUnit === 'per_sqft' && coverageSqmFromBoxes != null) {
+    return coverageSqmFromBoxes * SQFT_PER_SQM;
+  }
+  return quantity;
+}
+
 // Build one invoice line item with line total and optional coverage (tiles)
 function buildInvoiceItem(product, item) {
   const quantity = pickFirstFiniteNumber([item.quantity], 0);
@@ -167,20 +182,15 @@ function buildInvoiceItem(product, item) {
   const taxPercent = pickFirstFiniteNumber([item.taxPercent, product.taxPercent], 0);
   const unitType = item.unitType || 'Box';
 
-  const base = quantity * rate;
+  const billableQuantity = getBillableQuantity(product, item);
+  const base = billableQuantity * rate;
   const lineTotal = Math.round(base * (1 - discountPercent / 100) * (1 + taxPercent / 100) * 100) / 100;
 
-  let coverageSqm = null;
-  const sqmPerBox = getSqmPerBox(product);
-  if (sqmPerBox > 0) {
-    if (unitType === 'Box') {
-      coverageSqm = quantity * sqmPerBox;
-    } else if (unitType === 'Sq Meter' && quantity > 0) {
-      coverageSqm = quantity;
-    } else if (unitType === 'Sq Ft' && quantity > 0) {
-      coverageSqm = quantity / SQFT_PER_SQM;
-    }
-  }
+  const coverageSqm = getItemCoverageSqm(product, {
+    quantity,
+    unitType,
+    coverageSqm: item.coverageSqm,
+  });
 
   return {
     product: product._id,
