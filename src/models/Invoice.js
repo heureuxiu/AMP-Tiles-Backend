@@ -56,7 +56,17 @@ function calcLineTotal(item) {
   return Math.round(afterDiscount * (1 + (item.taxPercent || 0) / 100) * 100) / 100;
 }
 
+function toCents(value) {
+  const amount = Number(value) || 0;
+  return Math.round(amount * 100);
+}
+
 invoiceItemSchema.pre('save', function (next) {
+  const providedLineTotal = Number(this.lineTotal);
+  if (Number.isFinite(providedLineTotal) && providedLineTotal >= 0) {
+    this.lineTotal = Math.round(providedLineTotal * 100) / 100;
+    return next();
+  }
   this.lineTotal = calcLineTotal(this);
   next();
 });
@@ -172,10 +182,12 @@ invoiceSchema.pre('save', function () {
     this.grandTotal = Math.round((taxableAmount + this.tax) * 100) / 100;
   }
   // Remaining balance and payment status
-  const paid = Number(this.amountPaid) || 0;
-  this.remainingBalance = Math.max(0, (this.grandTotal || 0) - paid);
-  if (paid <= 0) this.paymentStatus = 'unpaid';
-  else if (paid >= (this.grandTotal || 0)) this.paymentStatus = 'paid';
+  const grandTotalCents = toCents(this.grandTotal || 0);
+  const paidCents = toCents(this.amountPaid || 0);
+  this.amountPaid = paidCents / 100;
+  this.remainingBalance = Math.max(0, grandTotalCents - paidCents) / 100;
+  if (paidCents <= 0) this.paymentStatus = 'unpaid';
+  else if (paidCents >= grandTotalCents) this.paymentStatus = 'paid';
   else this.paymentStatus = 'partially_paid';
 });
 
