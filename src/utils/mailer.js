@@ -19,7 +19,7 @@ function getSmtpConfig() {
     pass,
     secure: toBool(process.env.SMTP_SECURE),
     fromEmail: process.env.SMTP_FROM_EMAIL || user,
-    fromName: process.env.SMTP_FROM_NAME || 'AMP Tiles',
+    fromName: process.env.SMTP_FROM_NAME || 'AMP TILES PTY LTD',
     replyTo: process.env.SMTP_REPLY_TO || undefined,
     family: Number(process.env.SMTP_FAMILY || 4),
     connectionTimeout: Number(process.env.SMTP_CONNECTION_TIMEOUT || 20000),
@@ -63,7 +63,7 @@ function getTransporter() {
   return cachedTransporter;
 }
 
-async function sendEmail({ to, subject, text, html }) {
+async function sendEmail({ to, subject, text, html, attachments }) {
   const cfg = getSmtpConfig();
   const transporter = getTransporter();
 
@@ -78,6 +78,7 @@ async function sendEmail({ to, subject, text, html }) {
     text,
     html,
     replyTo: cfg.replyTo,
+    attachments: Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
   });
 }
 
