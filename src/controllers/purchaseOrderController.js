@@ -2,9 +2,110 @@ const PurchaseOrder = require('../models/PurchaseOrder');
 const Product = require('../models/Product');
 const Supplier = require('../models/Supplier');
 const StockTransaction = require('../models/StockTransaction');
+const { generatePurchaseOrderPdf } = require('../utils/purchaseOrderPdf');
 
 const AUTO_STOCK_ON_PO_RECEIVE_DEFAULT =
   String(process.env.AUTO_STOCK_ON_PO_RECEIVE ?? 'true').toLowerCase() !== 'false';
+
+let sendEmail = async () => {
+  throw new Error('Email service is not available');
+};
+
+function fallbackFormatDate(value) {
+  if (!value) return 'N/A';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'N/A';
+  return date.toLocaleDateString('en-AU', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+function fallbackFormatCurrency(amount, currency = 'AUD') {
+  const num = Number(amount) || 0;
+  return new Intl.NumberFormat('en-AU', {
+    style: 'currency',
+    currency: currency || 'AUD',
+  }).format(num);
+}
+
+function buildFallbackPurchaseOrderEmail(purchaseOrder) {
+  const poNumber = purchaseOrder.poNumber || String(purchaseOrder._id || '');
+  const supplierName = purchaseOrder.supplierName || purchaseOrder.supplier?.name || 'Supplier';
+  const poDate = fallbackFormatDate(purchaseOrder.poDate);
+  const grandTotal = fallbackFormatCurrency(
+    purchaseOrder.grandTotal,
+    purchaseOrder.currency || 'AUD'
+  );
+
+  const text = [
+    `Purchase Order ${poNumber}`,
+    `Dear ${supplierName},`,
+    '',
+    'Please find the purchase order details below.',
+    `PO Date: ${poDate}`,
+    `Grand Total: ${grandTotal}`,
+    '',
+    'Thank you,',
+    'AMP Tiles',
+  ].join('\n');
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; color: #111827; line-height: 1.4;">
+      <h2>Purchase Order ${poNumber}</h2>
+      <p>Dear ${supplierName},</p>
+      <p>Please find the purchase order details below.</p>
+      <p><strong>PO Date:</strong> ${poDate}<br/><strong>Grand Total:</strong> ${grandTotal}</p>
+      <p>Thank you,<br/>AMP Tiles</p>
+    </div>
+  `;
+
+  return {
+    subject: `Purchase Order ${poNumber} from AMP Tiles`,
+    text,
+    html,
+  };
+}
+
+let buildPurchaseOrderEmail = buildFallbackPurchaseOrderEmail;
+
+function loadOptionalModule(candidates) {
+  for (const mod of candidates) {
+    try {
+      return require(mod);
+    } catch (error) {
+      if (error && error.code !== 'MODULE_NOT_FOUND') {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn(`Failed loading optional module "${mod}"`, error.message);
+        }
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+const mailerModule = loadOptionalModule(['../utils/mailer']);
+if (mailerModule && typeof mailerModule.sendEmail === 'function') {
+  ({ sendEmail } = mailerModule);
+} else if (process.env.NODE_ENV !== 'production') {
+  console.warn('Mailer utility not found. Purchase order email sending will be disabled.');
+}
+
+const purchaseOrderEmailModule = loadOptionalModule([
+  '../utils/purchaseOrderEmail',
+  '../utils/purchase-order-email',
+  '../utils/PurchaseOrderEmail',
+]);
+if (
+  purchaseOrderEmailModule &&
+  typeof purchaseOrderEmailModule.buildPurchaseOrderEmail === 'function'
+) {
+  ({ buildPurchaseOrderEmail } = purchaseOrderEmailModule);
+} else if (process.env.NODE_ENV !== 'production') {
+  console.warn('Purchase order email template utility not found. Using fallback template.');
+}
 
 function normalizeText(value) {
   return String(value || '').trim().toLowerCase();
@@ -413,6 +514,133 @@ exports.updatePurchaseOrder = async (req, res) => {
       success: false,
       message: 'Failed to update purchase order',
       error: error.message,
+    });
+  }
+};
+
+// @desc    Get purchase order as PDF
+// @route   GET /api/purchase-orders/:id/pdf
+// @access  Private
+exports.getPurchaseOrderPdf = async (req, res) => {
+  try {
+    const purchaseOrder = await PurchaseOrder.findById(req.params.id)
+      .populate('supplier', 'name email phone contactPerson supplierNumber')
+      .populate(
+        'items.product',
+        'name sku unit tilesPerBox coveragePerBox coveragePerBoxUnit'
+      )
+      .lean();
+
+    if (!purchaseOrder) {
+      return res.status(404).json({
+        success: false,
+        message: 'Purchase order not found',
+      });
+    }
+
+    const pdfBuffer = await generatePurchaseOrderPdf(purchaseOrder);
+    const filename = `purchase-order-${purchaseOrder.poNumber || purchaseOrder._id}.pdf`.replace(
+      /\s/g,
+      '-'
+    );
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', pdfBuffer.length);
+    res.send(pdfBuffer);
+  } catch (error) {
+    console.error('Get purchase order PDF error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to generate purchase order PDF',
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Send purchase order to supplier email and mark as sent_to_supplier
+// @route   POST /api/purchase-orders/:id/send-to-supplier
+// @access  Private
+exports.sendPurchaseOrderToSupplier = async (req, res) => {
+  try {
+    const purchaseOrder = await PurchaseOrder.findById(req.params.id)
+      .populate('supplier', 'name email contactPerson supplierNumber')
+      .populate('createdBy', 'name email')
+      .populate(
+        'items.product',
+        'name sku unit tilesPerBox coveragePerBox coveragePerBoxUnit'
+      );
+
+    if (!purchaseOrder) {
+      return res.status(404).json({
+        success: false,
+        message: 'Purchase order not found',
+      });
+    }
+
+    if (purchaseOrder.status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot send a cancelled purchase order',
+      });
+    }
+
+    if (!purchaseOrder.supplier) {
+      return res.status(404).json({
+        success: false,
+        message: 'Supplier not found for this purchase order',
+      });
+    }
+
+    const supplierEmail = String(purchaseOrder.supplier.email || '')
+      .trim()
+      .toLowerCase();
+    if (!supplierEmail) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Supplier email is missing. Please add supplier email before sending purchase order.',
+      });
+    }
+
+    const emailPayload = buildPurchaseOrderEmail(purchaseOrder);
+    await sendEmail({
+      to: supplierEmail,
+      subject: emailPayload.subject,
+      text: emailPayload.text,
+      html: emailPayload.html,
+    });
+
+    if (purchaseOrder.status !== 'sent_to_supplier') {
+      purchaseOrder.status = 'sent_to_supplier';
+      await purchaseOrder.save();
+      await purchaseOrder.populate('supplier', 'name email contactPerson supplierNumber');
+      await purchaseOrder.populate('createdBy', 'name email');
+      await purchaseOrder.populate(
+        'items.product',
+        'name sku unit tilesPerBox coveragePerBox coveragePerBoxUnit'
+      );
+    }
+
+    res.status(200).json({
+      success: true,
+      emailSent: true,
+      message: `Purchase order sent to supplier at ${supplierEmail}`,
+      purchaseOrder,
+    });
+  } catch (error) {
+    const details = [
+      error?.message || 'Failed to send purchase order email',
+      error?.code ? `code=${error.code}` : '',
+      error?.command ? `command=${error.command}` : '',
+      error?.responseCode ? `responseCode=${error.responseCode}` : '',
+    ]
+      .filter(Boolean)
+      .join(' | ');
+
+    console.error('Error sending purchase order email:', error);
+    res.status(500).json({
+      success: false,
+      message: details || 'Failed to send purchase order email',
     });
   }
 };
