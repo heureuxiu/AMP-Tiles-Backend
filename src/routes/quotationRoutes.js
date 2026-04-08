@@ -16,6 +16,8 @@ function safeHandler(handler, name) {
 
 const getQuotations = safeHandler(quotationController.getQuotations, 'getQuotations');
 const getQuotation = safeHandler(quotationController.getQuotation, 'getQuotation');
+const sendQuotationEmail = safeHandler(quotationController.sendQuotationEmail, 'sendQuotationEmail');
+const getQuotationPdf = safeHandler(quotationController.getQuotationPdf, 'getQuotationPdf');
 const createQuotation = safeHandler(quotationController.createQuotation, 'createQuotation');
 const updateQuotation = safeHandler(quotationController.updateQuotation, 'updateQuotation');
 const deleteQuotation = safeHandler(quotationController.deleteQuotation, 'deleteQuotation');
@@ -30,6 +32,12 @@ router.get('/stats/summary', getQuotationStats);
 
 // Main CRUD routes
 router.route('/').get(getQuotations).post(createQuotation);
+
+// PDF route (must be before /:id so /:id/pdf is matched)
+router.get('/:id/pdf', getQuotationPdf);
+
+// Send quotation email route
+router.post('/:id/send', sendQuotationEmail);
 
 router
   .route('/:id')
