@@ -6,6 +6,7 @@ const {
   createInvoice,
   updateInvoice,
   markInvoiceAsPaid,
+  sendInvoiceEmail,
   deleteInvoice,
   getInvoiceStats,
 } = require('../controllers/invoiceController');
@@ -30,5 +31,6 @@ router.route('/:id').get(getInvoice).put(updateInvoice).delete(deleteInvoice);
 
 // Mark as paid route
 router.post('/:id/pay', markInvoiceAsPaid);
+router.post('/:id/send', sendInvoiceEmail);
 
 module.exports = router;
