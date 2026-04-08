@@ -26,12 +26,51 @@ function formatCurrency(amount) {
   }).format(num);
 }
 
+const DEFAULT_DELIVERY_COST = 295;
+const COMPANY_DETAILS = {
+  name: 'AMP TILES PTY LTD',
+  abn: '14 690 181 858',
+  address: 'Unit 15/55 Anderson Road, Smeaton Grange, NSW 2560',
+};
+const BANK_DETAILS = {
+  bank: 'NAB',
+  accountName: 'AMP TILES PTY LTD',
+  bsb: '082-356',
+  accountNumber: '26-722-1347',
+};
+
+function getQuotationAmountSnapshot(quotation) {
+  const subtotal = Number(quotation?.subtotal) || 0;
+  const discount = Number(quotation?.discount) || 0;
+  const tax = Number(quotation?.tax) || 0;
+  const baseTotal = subtotal - discount + tax;
+  const parsedDelivery = Number(quotation?.deliveryCost);
+  const fallbackDelivery = Math.max(0, Math.round((Number(quotation?.grandTotal) - baseTotal) * 100) / 100);
+  const deliveryCost = Number.isFinite(parsedDelivery)
+    ? Math.max(0, parsedDelivery)
+    : Number.isFinite(fallbackDelivery)
+      ? fallbackDelivery
+      : DEFAULT_DELIVERY_COST;
+  const grandTotal = Number.isFinite(Number(quotation?.grandTotal))
+    ? Number(quotation.grandTotal)
+    : baseTotal + deliveryCost;
+
+  return {
+    subtotal: Math.round(subtotal * 100) / 100,
+    discount: Math.round(discount * 100) / 100,
+    tax: Math.round(tax * 100) / 100,
+    deliveryCost: Math.round(deliveryCost * 100) / 100,
+    grandTotal: Math.round(grandTotal * 100) / 100,
+  };
+}
+
 function buildQuotationEmail(quotation) {
   const quoteNo = quotation.quotationNumber || String(quotation._id || '');
   const customerName = quotation.customerName || 'Customer';
   const quoteDate = formatDate(quotation.quotationDate);
   const validUntil = quotation.validUntil ? formatDate(quotation.validUntil) : 'N/A';
-  const grandTotal = formatCurrency(quotation.grandTotal);
+  const amounts = getQuotationAmountSnapshot(quotation);
+  const grandTotal = formatCurrency(amounts.grandTotal);
 
   const rowsHtml = (quotation.items || [])
     .map((item) => {
@@ -59,6 +98,10 @@ function buildQuotationEmail(quotation) {
     '',
     `Quotation Date: ${quoteDate}`,
     `Valid Until: ${validUntil}`,
+    `Subtotal: ${formatCurrency(amounts.subtotal)}`,
+    amounts.discount > 0 ? `Discount: -${formatCurrency(amounts.discount)}` : '',
+    amounts.tax > 0 ? `Tax (GST): ${formatCurrency(amounts.tax)}` : '',
+    `Delivery Cost: ${formatCurrency(amounts.deliveryCost)}`,
     `Grand Total: ${grandTotal}`,
     '',
     'Items:',
@@ -71,8 +114,16 @@ function buildQuotationEmail(quotation) {
     notesLine,
     termsLine,
     '',
+    `${COMPANY_DETAILS.name}`,
+    `ABN: ${COMPANY_DETAILS.abn}`,
+    `Address: ${COMPANY_DETAILS.address}`,
+    `Bank: ${BANK_DETAILS.bank}`,
+    `Account Name: ${BANK_DETAILS.accountName}`,
+    `BSB: ${BANK_DETAILS.bsb}`,
+    `Account Number: ${BANK_DETAILS.accountNumber}`,
+    '',
     'Thank you,',
-    'AMP Tiles',
+    COMPANY_DETAILS.name,
   ]
     .filter(Boolean)
     .join('\n');
@@ -85,6 +136,18 @@ function buildQuotationEmail(quotation) {
       <p>
         <strong>Quotation Date:</strong> ${escapeHtml(quoteDate)}<br/>
         <strong>Valid Until:</strong> ${escapeHtml(validUntil)}<br/>
+        <strong>Subtotal:</strong> ${escapeHtml(formatCurrency(amounts.subtotal))}<br/>
+        ${
+          amounts.discount > 0
+            ? `<strong>Discount:</strong> -${escapeHtml(formatCurrency(amounts.discount))}<br/>`
+            : ''
+        }
+        ${
+          amounts.tax > 0
+            ? `<strong>Tax (GST):</strong> ${escapeHtml(formatCurrency(amounts.tax))}<br/>`
+            : ''
+        }
+        <strong>Delivery Cost:</strong> ${escapeHtml(formatCurrency(amounts.deliveryCost))}<br/>
         <strong>Grand Total:</strong> ${escapeHtml(grandTotal)}
       </p>
 
@@ -111,12 +174,26 @@ function buildQuotationEmail(quotation) {
           : ''
       }
 
-      <p style="margin-top:24px;">Thank you,<br/>AMP Tiles</p>
+      <p style="margin-top:20px;">
+        <strong>${escapeHtml(COMPANY_DETAILS.name)}</strong><br/>
+        ABN: ${escapeHtml(COMPANY_DETAILS.abn)}<br/>
+        ${escapeHtml(COMPANY_DETAILS.address)}
+      </p>
+
+      <p style="margin-top:12px;">
+        <strong>Bank Details</strong><br/>
+        Bank: ${escapeHtml(BANK_DETAILS.bank)}<br/>
+        Account Name: ${escapeHtml(BANK_DETAILS.accountName)}<br/>
+        BSB: ${escapeHtml(BANK_DETAILS.bsb)}<br/>
+        Account Number: ${escapeHtml(BANK_DETAILS.accountNumber)}
+      </p>
+
+      <p style="margin-top:24px;">Thank you,<br/>${escapeHtml(COMPANY_DETAILS.name)}</p>
     </div>
   `;
 
   return {
-    subject: `Quotation ${quoteNo} from AMP Tiles`,
+    subject: `Quotation ${quoteNo} from ${COMPANY_DETAILS.name}`,
     text,
     html,
   };
