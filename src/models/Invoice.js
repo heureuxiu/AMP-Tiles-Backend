@@ -108,6 +108,7 @@ const invoiceSchema = new mongoose.Schema(
     discountAmount: { type: Number, default: 0, min: 0 },
     tax: { type: Number, default: 0, min: 0 },
     taxRate: { type: Number, default: 10, min: 0 },
+    deliveryCost: { type: Number, default: 295, min: 0 },
     grandTotal: { type: Number, default: 0, min: 0 },
 
     // Invoice lifecycle: stock reduces only when confirmed or delivered
@@ -167,6 +168,12 @@ invoiceSchema.pre('save', async function () {
 
 // Calculate subtotal/grandTotal and payment fields before saving
 invoiceSchema.pre('save', function () {
+  const parsedDeliveryCost = Number(this.deliveryCost);
+  const normalizedDeliveryCost = Number.isFinite(parsedDeliveryCost)
+    ? Math.max(0, parsedDeliveryCost)
+    : 295;
+  this.deliveryCost = Math.round(normalizedDeliveryCost * 100) / 100;
+
   if (this.items && this.items.length > 0) {
     this.subtotal = this.items.reduce((sum, item) => sum + (item.lineTotal || 0), 0);
     if (this.discount > 0) {
@@ -179,7 +186,7 @@ invoiceSchema.pre('save', function () {
     }
     const taxableAmount = this.subtotal - this.discountAmount;
     this.tax = (taxableAmount * (this.taxRate || 0)) / 100;
-    this.grandTotal = Math.round((taxableAmount + this.tax) * 100) / 100;
+    this.grandTotal = Math.round((taxableAmount + this.tax + this.deliveryCost) * 100) / 100;
   }
   // Remaining balance and payment status
   const grandTotalCents = toCents(this.grandTotal || 0);
