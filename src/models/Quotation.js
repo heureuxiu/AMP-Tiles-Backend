@@ -105,6 +105,11 @@ const quotationSchema = new mongoose.Schema(
       default: 10, // GST in Australia
       min: 0,
     },
+    deliveryCost: {
+      type: Number,
+      default: 295,
+      min: 0,
+    },
     grandTotal: {
       type: Number,
       required: true,
