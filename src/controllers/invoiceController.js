@@ -5,6 +5,178 @@ const Quotation = require('../models/Quotation');
 const StockTransaction = require('../models/StockTransaction');
 const { generateInvoicePdf } = require('../utils/invoicePdf');
 
+let sendEmail = async () => {
+  throw new Error('Email service is not available');
+};
+
+function fallbackFormatDate(value) {
+  if (!value) return 'N/A';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'N/A';
+  return date.toLocaleDateString('en-AU', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+function fallbackFormatCurrency(amount) {
+  const num = Number(amount) || 0;
+  return new Intl.NumberFormat('en-AU', {
+    style: 'currency',
+    currency: 'AUD',
+  }).format(num);
+}
+
+function toCents(value) {
+  return Math.round((Number(value) || 0) * 100);
+}
+
+const DEFAULT_DELIVERY_COST = 295;
+const COMPANY_NAME = 'AMP TILES PTY LTD';
+
+function getInvoiceAmountSnapshot(invoice) {
+  const subtotal = Number(invoice?.subtotal) || 0;
+  const discountAmount = Number(invoice?.discountAmount ?? invoice?.discount) || 0;
+  const taxAmount = Number(invoice?.tax) || 0;
+  const baseTotal = subtotal - discountAmount + taxAmount;
+  const parsedDelivery = Number(invoice?.deliveryCost);
+  const fallbackDelivery = Math.max(0, Math.round((Number(invoice?.grandTotal) - baseTotal) * 100) / 100);
+  const deliveryCost = Number.isFinite(parsedDelivery)
+    ? Math.max(0, parsedDelivery)
+    : Number.isFinite(fallbackDelivery)
+      ? fallbackDelivery
+      : DEFAULT_DELIVERY_COST;
+  const grandTotal = Number.isFinite(Number(invoice?.grandTotal))
+    ? Number(invoice.grandTotal)
+    : baseTotal + deliveryCost;
+
+  return {
+    subtotal,
+    discountAmount,
+    taxAmount,
+    deliveryCost: Math.round(deliveryCost * 100) / 100,
+    grandTotal: Math.round(grandTotal * 100) / 100,
+  };
+}
+
+function buildFallbackInvoiceEmail(invoice) {
+  const invoiceNo = invoice.invoiceNumber || String(invoice._id || '');
+  const customerName = invoice.customerName || 'Customer';
+  const amounts = getInvoiceAmountSnapshot(invoice);
+  const grandTotalCents = Math.max(0, toCents(amounts.grandTotal));
+  const paidCents = Math.max(0, Math.min(grandTotalCents, toCents(invoice.amountPaid)));
+  const remainingCents = Math.max(0, grandTotalCents - paidCents);
+  const isFinalReceipt = grandTotalCents > 0 && remainingCents === 0;
+
+  const subject = isFinalReceipt
+    ? `Payment received in full for Invoice ${invoiceNo}`
+    : `Updated Invoice ${invoiceNo} from ${COMPANY_NAME}`;
+
+  const text = [
+    `Invoice ${invoiceNo}`,
+    `Dear ${customerName},`,
+    '',
+    isFinalReceipt
+      ? 'Thank you. We confirm this invoice is now fully paid.'
+      : 'Please find your latest updated invoice and payment status below.',
+    '',
+    `Invoice Date: ${fallbackFormatDate(invoice.invoiceDate)}`,
+    `Due Date: ${invoice.dueDate ? fallbackFormatDate(invoice.dueDate) : 'N/A'}`,
+    `Subtotal: ${fallbackFormatCurrency(amounts.subtotal)}`,
+    amounts.discountAmount > 0 ? `Discount: -${fallbackFormatCurrency(amounts.discountAmount)}` : '',
+    amounts.taxAmount > 0 ? `Tax (GST): ${fallbackFormatCurrency(amounts.taxAmount)}` : '',
+    `Delivery Cost: ${fallbackFormatCurrency(amounts.deliveryCost)}`,
+    `Grand Total: ${fallbackFormatCurrency(amounts.grandTotal)}`,
+    `Amount Received: ${fallbackFormatCurrency(paidCents / 100)}`,
+    `Outstanding: ${fallbackFormatCurrency(remainingCents / 100)}`,
+    '',
+    'Please see attached invoice PDF for your records.',
+    '',
+    'Thank you,',
+    COMPANY_NAME,
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; color: #111827; line-height: 1.4;">
+      <h2>Invoice ${invoiceNo}</h2>
+      <p>Dear ${customerName},</p>
+      <p>${
+        isFinalReceipt
+          ? 'Thank you. We confirm this invoice is now fully paid.'
+          : 'Please find your latest updated invoice and payment status below.'
+      }</p>
+      <p>
+        <strong>Invoice Date:</strong> ${fallbackFormatDate(invoice.invoiceDate)}<br/>
+        <strong>Due Date:</strong> ${
+          invoice.dueDate ? fallbackFormatDate(invoice.dueDate) : 'N/A'
+        }<br/>
+        <strong>Subtotal:</strong> ${fallbackFormatCurrency(amounts.subtotal)}<br/>
+        ${
+          amounts.discountAmount > 0
+            ? `<strong>Discount:</strong> -${fallbackFormatCurrency(amounts.discountAmount)}<br/>`
+            : ''
+        }
+        ${
+          amounts.taxAmount > 0
+            ? `<strong>Tax (GST):</strong> ${fallbackFormatCurrency(amounts.taxAmount)}<br/>`
+            : ''
+        }
+        <strong>Delivery Cost:</strong> ${fallbackFormatCurrency(amounts.deliveryCost)}<br/>
+        <strong>Grand Total:</strong> ${fallbackFormatCurrency(amounts.grandTotal)}<br/>
+        <strong>Amount Received:</strong> ${fallbackFormatCurrency(paidCents / 100)}<br/>
+        <strong>Outstanding:</strong> ${fallbackFormatCurrency(remainingCents / 100)}
+      </p>
+      <p>Thank you,<br/>${COMPANY_NAME}</p>
+    </div>
+  `;
+
+  return {
+    subject,
+    text,
+    html,
+    isFinalReceipt,
+  };
+}
+
+let buildInvoiceEmail = buildFallbackInvoiceEmail;
+
+function loadOptionalModule(candidates) {
+  for (const mod of candidates) {
+    try {
+      return require(mod);
+    } catch (error) {
+      if (error && error.code !== 'MODULE_NOT_FOUND') {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn(`Failed loading optional module "${mod}"`, error.message);
+        }
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+const mailerModule = loadOptionalModule(['../utils/mailer']);
+if (mailerModule && typeof mailerModule.sendEmail === 'function') {
+  ({ sendEmail } = mailerModule);
+} else if (process.env.NODE_ENV !== 'production') {
+  console.warn('Mailer utility not found. Invoice email sending will be disabled.');
+}
+
+const invoiceEmailModule = loadOptionalModule([
+  '../utils/invoiceEmail',
+  '../utils/invoice-email',
+  '../utils/InvoiceEmail',
+]);
+if (invoiceEmailModule && typeof invoiceEmailModule.buildInvoiceEmail === 'function') {
+  ({ buildInvoiceEmail } = invoiceEmailModule);
+} else if (process.env.NODE_ENV !== 'production') {
+  console.warn('Invoice email template utility not found. Using fallback template.');
+}
+
 const HOLDING_QUOTATION_STATUSES = ['sent', 'accepted'];
 const SQFT_PER_SQM = 10.764;
 
@@ -421,6 +593,64 @@ async function restoreStockForInvoice(invoice, options = {}) {
   }
 }
 
+function normalizeEmail(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase();
+}
+
+function summarizeEmailError(error, fallbackMessage = 'Failed to send invoice email') {
+  return [
+    error?.message || fallbackMessage,
+    error?.code ? `code=${error.code}` : '',
+    error?.command ? `command=${error.command}` : '',
+    error?.responseCode ? `responseCode=${error.responseCode}` : '',
+  ]
+    .filter(Boolean)
+    .join(' | ');
+}
+
+async function sendInvoiceEmailWithAttachment(invoiceDoc, options = {}) {
+  const invoice = invoiceDoc?.toObject ? invoiceDoc.toObject() : invoiceDoc;
+  if (!invoice) {
+    const error = new Error('Invoice not found');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const customerEmail = normalizeEmail(invoice.customerEmail);
+  if (!customerEmail) {
+    const error = new Error(
+      'Customer email is missing. Please add customer email before sending invoice.'
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const pdfBuffer = await generateInvoicePdf(invoice);
+  const emailPayload = buildInvoiceEmail(invoice, options);
+  const invoiceRef = String(invoice.invoiceNumber || invoice._id || 'invoice').replace(/\s/g, '-');
+
+  await sendEmail({
+    to: customerEmail,
+    subject: emailPayload.subject,
+    text: emailPayload.text,
+    html: emailPayload.html,
+    attachments: [
+      {
+        filename: `invoice-${invoiceRef}.pdf`,
+        content: pdfBuffer,
+        contentType: 'application/pdf',
+      },
+    ],
+  });
+
+  return {
+    customerEmail,
+    emailPayload,
+  };
+}
+
 // @desc    Get all invoices
 // @route   GET /api/invoices
 // @access  Private
@@ -520,12 +750,19 @@ exports.createInvoice = async (req, res) => {
       status: reqStatus,
       paymentMethod,
       amountPaid,
+      sendEmail: shouldSendEmail,
     } = req.body;
 
     if (!customerName || !items || items.length === 0) {
       return res.status(400).json({
         success: false,
         message: 'Please provide customer name and at least one item',
+      });
+    }
+    if (shouldSendEmail && !normalizeEmail(customerEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Customer email is required to send invoice by email',
       });
     }
 
@@ -580,12 +817,30 @@ exports.createInvoice = async (req, res) => {
 
     const populatedInvoice = await Invoice.findById(invoice._id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku');
+      .populate('items.product', 'name sku')
+      .populate('quotation', 'quotationNumber');
+
+    let emailSent = false;
+    let emailError = null;
+    let responseMessage = 'Invoice created successfully';
+
+    if (shouldSendEmail) {
+      try {
+        await sendInvoiceEmailWithAttachment(populatedInvoice);
+        emailSent = true;
+        responseMessage = `Invoice created and emailed to ${normalizeEmail(populatedInvoice.customerEmail)}`;
+      } catch (error) {
+        emailError = summarizeEmailError(error);
+        responseMessage = 'Invoice created, but email could not be sent';
+      }
+    }
 
     res.status(201).json({
       success: true,
-      message: 'Invoice created successfully',
+      message: responseMessage,
       invoice: populatedInvoice,
+      emailSent,
+      emailError,
     });
   } catch (error) {
     console.error('Create invoice error:', error);
@@ -629,6 +884,7 @@ exports.updateInvoice = async (req, res) => {
       status: newStatus,
       paymentMethod,
       amountPaid,
+      sendEmail: shouldSendEmail,
     } = req.body;
 
     const oldStatus = invoice.status;
@@ -669,6 +925,12 @@ exports.updateInvoice = async (req, res) => {
     if (amountPaid !== undefined) {
       invoice.amountPaid = pickFirstFiniteNumber([amountPaid], invoice.amountPaid || 0);
     }
+    if (shouldSendEmail && !normalizeEmail(invoice.customerEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Customer email is required to send updated invoice',
+      });
+    }
 
     // Status change: stock only on confirmed/delivered
     if (newStatus) {
@@ -696,12 +958,33 @@ exports.updateInvoice = async (req, res) => {
 
     const updatedInvoice = await Invoice.findById(invoice._id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku');
+      .populate('items.product', 'name sku')
+      .populate('quotation', 'quotationNumber');
+
+    let emailSent = false;
+    let emailError = null;
+    let responseMessage = 'Invoice updated successfully';
+
+    if (shouldSendEmail) {
+      try {
+        const { emailPayload, customerEmail: recipientEmail } =
+          await sendInvoiceEmailWithAttachment(updatedInvoice);
+        emailSent = true;
+        responseMessage = emailPayload.isFinalReceipt
+          ? `Payment received in full. Final invoice emailed to ${recipientEmail}`
+          : `Updated invoice emailed to ${recipientEmail}`;
+      } catch (error) {
+        emailError = summarizeEmailError(error);
+        responseMessage = 'Invoice updated, but email could not be sent';
+      }
+    }
 
     res.status(200).json({
       success: true,
-      message: 'Invoice updated successfully',
+      message: responseMessage,
       invoice: updatedInvoice,
+      emailSent,
+      emailError,
     });
   } catch (error) {
     console.error('Update invoice error:', error);
@@ -723,10 +1006,17 @@ exports.markInvoiceAsPaid = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
 
-    const { paymentMethod, paidAmount, paidDate } = req.body;
+    const { paymentMethod, paidAmount, paidDate, sendEmail: shouldSendEmail } = req.body;
     const amount = paidAmount != null
       ? pickFirstFiniteNumber([paidAmount], invoice.grandTotal || 0)
       : invoice.grandTotal;
+
+    if (shouldSendEmail && !normalizeEmail(invoice.customerEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Customer email is required to send updated invoice',
+      });
+    }
 
     invoice.paymentMethod = paymentMethod || invoice.paymentMethod || '';
     invoice.amountPaid = amount;
@@ -735,12 +1025,33 @@ exports.markInvoiceAsPaid = async (req, res) => {
 
     const updatedInvoice = await Invoice.findById(invoice._id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku');
+      .populate('items.product', 'name sku')
+      .populate('quotation', 'quotationNumber');
+
+    let emailSent = false;
+    let emailError = null;
+    let responseMessage = 'Payment updated successfully';
+
+    if (shouldSendEmail) {
+      try {
+        const { emailPayload, customerEmail: recipientEmail } =
+          await sendInvoiceEmailWithAttachment(updatedInvoice);
+        emailSent = true;
+        responseMessage = emailPayload.isFinalReceipt
+          ? `Payment received in full. Final invoice emailed to ${recipientEmail}`
+          : `Updated invoice emailed to ${recipientEmail}`;
+      } catch (error) {
+        emailError = summarizeEmailError(error);
+        responseMessage = 'Payment updated, but email could not be sent';
+      }
+    }
 
     res.status(200).json({
       success: true,
-      message: 'Payment updated successfully',
+      message: responseMessage,
       invoice: updatedInvoice,
+      emailSent,
+      emailError,
     });
   } catch (error) {
     console.error('Mark invoice as paid error:', error);
@@ -748,6 +1059,50 @@ exports.markInvoiceAsPaid = async (req, res) => {
       success: false,
       message: 'Server error while updating payment',
       error: error.message,
+    });
+  }
+};
+
+// @desc    Send invoice to customer email
+// @route   POST /api/invoices/:id/send
+// @access  Private
+exports.sendInvoiceEmail = async (req, res) => {
+  try {
+    const invoice = await Invoice.findById(req.params.id)
+      .populate('createdBy', 'name email')
+      .populate('items.product', 'name sku')
+      .populate('quotation', 'quotationNumber');
+
+    if (!invoice) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invoice not found',
+      });
+    }
+
+    if (invoice.status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot send a cancelled invoice',
+      });
+    }
+
+    const { customerEmail, emailPayload } = await sendInvoiceEmailWithAttachment(invoice);
+
+    res.status(200).json({
+      success: true,
+      emailSent: true,
+      message: emailPayload.isFinalReceipt
+        ? `Final payment receipt sent to ${customerEmail}`
+        : `Updated invoice sent to ${customerEmail}`,
+      invoice,
+    });
+  } catch (error) {
+    const details = summarizeEmailError(error);
+    console.error('Send invoice email error:', error);
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: details || 'Failed to send invoice email',
     });
   }
 };
