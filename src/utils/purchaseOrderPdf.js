@@ -1,16 +1,4 @@
-const path = require('path');
-const fs = require('fs');
-
-// Lazy-load puppeteer so server can start even if not installed yet
-function getPuppeteer() {
-  try {
-    return require('puppeteer');
-  } catch (e) {
-    throw new Error(
-      'puppeteer is not installed. Run: npm install puppeteer (in the server folder, with dev server stopped)'
-    );
-  }
-}
+const { getPuppeteer, launchPuppeteerBrowser } = require('./puppeteerLauncher');
 
 function escapeHtml(text) {
   if (text == null) return '';
@@ -378,10 +366,7 @@ async function generatePurchaseOrderPdf(purchaseOrder) {
   const html = buildPurchaseOrderHtml(purchaseOrder);
   let browser;
   try {
-    browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-    });
+    browser = await launchPuppeteerBrowser(puppeteer);
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'networkidle0' });
     const pdfBuffer = await page.pdf({
