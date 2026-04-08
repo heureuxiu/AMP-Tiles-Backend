@@ -2,8 +2,10 @@ const express = require('express');
 const {
   getPurchaseOrders,
   getPurchaseOrder,
+  getPurchaseOrderPdf,
   createPurchaseOrder,
   updatePurchaseOrder,
+  sendPurchaseOrderToSupplier,
   receivePurchaseOrder,
   deletePurchaseOrder,
   getPurchaseOrderStats,
@@ -21,7 +23,13 @@ router.get('/stats/summary', getPurchaseOrderStats);
 // Main routes
 router.route('/').get(getPurchaseOrders).post(createPurchaseOrder);
 
+// PDF route
+router.get('/:id/pdf', getPurchaseOrderPdf);
+
 router.route('/:id').get(getPurchaseOrder).put(updatePurchaseOrder).delete(deletePurchaseOrder);
+
+// Send purchase order to supplier email route
+router.post('/:id/send-to-supplier', sendPurchaseOrderToSupplier);
 
 // Receive purchase order route
 router.post('/:id/receive', receivePurchaseOrder);
