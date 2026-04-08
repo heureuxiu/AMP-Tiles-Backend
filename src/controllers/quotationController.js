@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Quotation = require('../models/Quotation');
 const Product = require('../models/Product');
 const Invoice = require('../models/Invoice');
+const { generateQuotationPdf } = require('../utils/quotationPdf');
 
 function escapeHtml(value) {
   return String(value || '')
@@ -31,12 +32,60 @@ function formatCurrency(amount) {
   }).format(num);
 }
 
+const DEFAULT_DELIVERY_COST = 295;
+const COMPANY_NAME = 'AMP TILES PTY LTD';
+
+function roundMoney(value) {
+  return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+function normalizeDeliveryCost(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return DEFAULT_DELIVERY_COST;
+  return roundMoney(numeric);
+}
+
+function calculateQuotationGrandTotal({ subtotal, discount, tax, deliveryCost }) {
+  return roundMoney(
+    (Number(subtotal) || 0) -
+      (Number(discount) || 0) +
+      (Number(tax) || 0) +
+      normalizeDeliveryCost(deliveryCost)
+  );
+}
+
+function getQuotationAmountSnapshot(quotation) {
+  const subtotal = Number(quotation?.subtotal) || 0;
+  const discount = Number(quotation?.discount) || 0;
+  const tax = Number(quotation?.tax) || 0;
+  const baseTotal = subtotal - discount + tax;
+  const parsedDelivery = Number(quotation?.deliveryCost);
+  const fallbackDelivery = Math.max(0, roundMoney(Number(quotation?.grandTotal) - baseTotal));
+  const deliveryCost = Number.isFinite(parsedDelivery)
+    ? Math.max(0, parsedDelivery)
+    : Number.isFinite(fallbackDelivery)
+      ? fallbackDelivery
+      : DEFAULT_DELIVERY_COST;
+  const grandTotal = Number.isFinite(Number(quotation?.grandTotal))
+    ? Number(quotation.grandTotal)
+    : baseTotal + deliveryCost;
+
+  return {
+    subtotal: roundMoney(subtotal),
+    discount: roundMoney(discount),
+    tax: roundMoney(tax),
+    deliveryCost: roundMoney(deliveryCost),
+    grandTotal: roundMoney(grandTotal),
+  };
+}
+
 function buildFallbackQuotationEmail(quotation) {
   const quoteNo = quotation.quotationNumber || String(quotation._id || '');
   const customerName = quotation.customerName || 'Customer';
   const quoteDate = formatDate(quotation.quotationDate);
   const validUntil = quotation.validUntil ? formatDate(quotation.validUntil) : 'N/A';
-  const grandTotal = formatCurrency(quotation.grandTotal);
+  const amounts = getQuotationAmountSnapshot(quotation);
+  const grandTotal = formatCurrency(amounts.grandTotal);
 
   const rowsHtml = (quotation.items || [])
     .map((item) => {
@@ -64,6 +113,10 @@ function buildFallbackQuotationEmail(quotation) {
     '',
     `Quotation Date: ${quoteDate}`,
     `Valid Until: ${validUntil}`,
+    `Subtotal: ${formatCurrency(amounts.subtotal)}`,
+    amounts.discount > 0 ? `Discount: -${formatCurrency(amounts.discount)}` : '',
+    amounts.tax > 0 ? `Tax (GST): ${formatCurrency(amounts.tax)}` : '',
+    `Delivery Cost: ${formatCurrency(amounts.deliveryCost)}`,
     `Grand Total: ${grandTotal}`,
     '',
     'Items:',
@@ -77,7 +130,7 @@ function buildFallbackQuotationEmail(quotation) {
     termsLine,
     '',
     'Thank you,',
-    'AMP Tiles',
+    COMPANY_NAME,
   ]
     .filter(Boolean)
     .join('\n');
@@ -90,6 +143,18 @@ function buildFallbackQuotationEmail(quotation) {
       <p>
         <strong>Quotation Date:</strong> ${escapeHtml(quoteDate)}<br/>
         <strong>Valid Until:</strong> ${escapeHtml(validUntil)}<br/>
+        <strong>Subtotal:</strong> ${escapeHtml(formatCurrency(amounts.subtotal))}<br/>
+        ${
+          amounts.discount > 0
+            ? `<strong>Discount:</strong> -${escapeHtml(formatCurrency(amounts.discount))}<br/>`
+            : ''
+        }
+        ${
+          amounts.tax > 0
+            ? `<strong>Tax (GST):</strong> ${escapeHtml(formatCurrency(amounts.tax))}<br/>`
+            : ''
+        }
+        <strong>Delivery Cost:</strong> ${escapeHtml(formatCurrency(amounts.deliveryCost))}<br/>
         <strong>Grand Total:</strong> ${escapeHtml(grandTotal)}
       </p>
 
@@ -116,12 +181,12 @@ function buildFallbackQuotationEmail(quotation) {
           : ''
       }
 
-      <p style="margin-top:24px;">Thank you,<br/>AMP Tiles</p>
+      <p style="margin-top:24px;">Thank you,<br/>${COMPANY_NAME}</p>
     </div>
   `;
 
   return {
-    subject: `Quotation ${quoteNo} from AMP Tiles`,
+    subject: `Quotation ${quoteNo} from ${COMPANY_NAME}`,
     text,
     html,
   };
@@ -262,6 +327,122 @@ exports.getQuotation = async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message,
+    });
+  }
+};
+
+// @desc    Send quotation to customer email and mark as sent
+// @route   POST /api/quotations/:id/send
+// @access  Private
+exports.sendQuotationEmail = async (req, res) => {
+  try {
+    const quotation = await Quotation.findById(req.params.id)
+      .populate('createdBy', 'name email')
+      .populate('items.product', 'name sku');
+
+    if (!quotation) {
+      return res.status(404).json({
+        success: false,
+        message: 'Quotation not found',
+      });
+    }
+
+    if (quotation.status === 'converted') {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot send a converted quotation',
+      });
+    }
+
+    if (quotation.status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot send a cancelled quotation',
+      });
+    }
+
+    const customerEmail = String(quotation.customerEmail || '')
+      .trim()
+      .toLowerCase();
+    if (!customerEmail) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Customer email is missing. Please add customer email before sending quotation.',
+      });
+    }
+
+    const emailPayload = buildQuotationEmail(quotation);
+    await sendEmail({
+      to: customerEmail,
+      subject: emailPayload.subject,
+      text: emailPayload.text,
+      html: emailPayload.html,
+    });
+
+    if (quotation.status !== 'sent') {
+      quotation.status = 'sent';
+      await quotation.save();
+      await quotation.populate('createdBy', 'name email');
+      await quotation.populate('items.product', 'name sku');
+    }
+
+    res.status(200).json({
+      success: true,
+      emailSent: true,
+      message: `Quotation sent to ${customerEmail}`,
+      quotation,
+    });
+  } catch (error) {
+    const details = [
+      error?.message || 'Failed to send quotation email',
+      error?.code ? `code=${error.code}` : '',
+      error?.command ? `command=${error.command}` : '',
+      error?.responseCode ? `responseCode=${error.responseCode}` : '',
+    ]
+      .filter(Boolean)
+      .join(' | ');
+
+    console.error('Send quotation email error:', error);
+    res.status(500).json({
+      success: false,
+      message: details || 'Failed to send quotation email',
+    });
+  }
+};
+
+// @desc    Get quotation as PDF
+// @route   GET /api/quotations/:id/pdf
+// @access  Private
+exports.getQuotationPdf = async (req, res) => {
+  try {
+    const quotation = await Quotation.findById(req.params.id)
+      .populate('createdBy', 'name email')
+      .populate('items.product', 'name sku')
+      .lean();
+
+    if (!quotation) {
+      return res.status(404).json({
+        success: false,
+        message: 'Quotation not found',
+      });
+    }
+
+    const pdfBuffer = await generateQuotationPdf(quotation);
+    const filename = `quotation-${quotation.quotationNumber || quotation._id}.pdf`.replace(
+      /\s/g,
+      '-'
+    );
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', pdfBuffer.length);
+    res.send(pdfBuffer);
+  } catch (error) {
+    console.error('Get quotation PDF error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to generate quotation PDF',
+      error: error.message,
     });
   }
 };
@@ -698,7 +879,13 @@ exports.createQuotation = async (req, res) => {
       totalTax += built.taxAmount;
     }
 
-    const grandTotal = subtotal - totalDiscount + totalTax;
+    const deliveryCost = DEFAULT_DELIVERY_COST;
+    const grandTotal = calculateQuotationGrandTotal({
+      subtotal,
+      discount: totalDiscount,
+      tax: totalTax,
+      deliveryCost,
+    });
 
     // Create quotation
     const quotation = await Quotation.create({
@@ -714,6 +901,7 @@ exports.createQuotation = async (req, res) => {
       discountType: discountType || 'fixed',
       tax: totalTax,
       taxRate: taxRate || 10,
+      deliveryCost,
       grandTotal,
       notes,
       terms,
@@ -853,7 +1041,12 @@ exports.updateQuotation = async (req, res) => {
         totalTax += built.taxAmount;
       }
 
-      const grandTotal = subtotal - totalDiscount + totalTax;
+      const grandTotal = calculateQuotationGrandTotal({
+        subtotal,
+        discount: totalDiscount,
+        tax: totalTax,
+        deliveryCost: DEFAULT_DELIVERY_COST,
+      });
 
       quotation.items = populatedItems;
       quotation.subtotal = subtotal;
@@ -861,6 +1054,7 @@ exports.updateQuotation = async (req, res) => {
       quotation.discountType = discountType || quotation.discountType;
       quotation.tax = totalTax;
       quotation.taxRate = taxRate || quotation.taxRate;
+      quotation.deliveryCost = DEFAULT_DELIVERY_COST;
       quotation.grandTotal = grandTotal;
     }
 
@@ -874,6 +1068,14 @@ exports.updateQuotation = async (req, res) => {
     if (notes !== undefined) quotation.notes = notes;
     if (terms !== undefined) quotation.terms = terms;
     if (status) quotation.status = status;
+
+    quotation.deliveryCost = normalizeDeliveryCost(quotation.deliveryCost);
+    quotation.grandTotal = calculateQuotationGrandTotal({
+      subtotal: quotation.subtotal,
+      discount: quotation.discount,
+      tax: quotation.tax,
+      deliveryCost: quotation.deliveryCost,
+    });
 
     await quotation.save();
 
@@ -992,6 +1194,7 @@ exports.convertToInvoice = async (req, res) => {
       discount: 0,
       discountType: 'fixed',
       taxRate: 0,
+      deliveryCost: normalizeDeliveryCost(quotation.deliveryCost),
       notes: quotation.notes,
       terms: quotation.terms,
       status: 'confirmed',
