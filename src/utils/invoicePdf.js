@@ -1,3 +1,6 @@
+const path = require('path');
+const fs = require('fs');
+
 // Lazy-load puppeteer so server can start even if not installed yet
 function getPuppeteer() {
   try {
@@ -20,50 +23,119 @@ function escapeHtml(text) {
     .replace(/'/g, '&#39;');
 }
 
-function formatCurrency(amount) {
+function formatNumber(amount) {
   return new Intl.NumberFormat('en-AU', {
-    style: 'currency',
-    currency: 'AUD',
     minimumFractionDigits: 2,
-  }).format(amount || 0);
+    maximumFractionDigits: 2,
+  }).format(Number(amount) || 0);
 }
 
 function formatDate(date) {
   if (!date) return '';
   const d = new Date(date);
-  return d.toLocaleDateString('en-AU', {
-    day: '2-digit',
-    month: 'long',
-    year: 'numeric',
-  });
+  if (Number.isNaN(d.getTime())) return '';
+  const day = d.getDate();
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${day} ${months[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+function toCents(value) {
+  return Math.round((Number(value) || 0) * 100);
+}
+
+function getPaymentStatusLabel(status) {
+  if (status === 'paid') return 'Fully Paid';
+  if (status === 'partially_paid') return 'Partially Paid';
+  if (status === 'unpaid') return 'Unpaid';
+  return String(status || 'Unpaid')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatQuantity(value) {
+  const numeric = Number(value) || 0;
+  const rounded = Math.round(numeric * 1000) / 1000;
+  if (Number.isInteger(rounded)) return String(rounded);
+  return rounded.toFixed(3).replace(/\.?0+$/, '');
+}
+
+function getLogoBase64() {
+  try {
+    const logoPath = path.resolve(__dirname, '../../../client/public/assets/AMP-TILES-LOGO.png');
+    const logoBuffer = fs.readFileSync(logoPath);
+    return `data:image/png;base64,${logoBuffer.toString('base64')}`;
+  } catch (e) {
+    return '';
+  }
 }
 
 function buildInvoiceHtml(invoice, companyInfo = {}) {
   const company = {
-    name: companyInfo.name || 'AMP Tiles Australia',
-    address: companyInfo.address || '456 Business Park Drive, Melbourne VIC 3000',
-    phone: companyInfo.phone || '+61 3 9999 8888',
-    email: companyInfo.email || 'info@amptiles.com.au',
-    abn: companyInfo.abn || '12 345 678 901',
+    name: companyInfo.name || 'AMP TILES PTY LTD',
+    addressLine1: companyInfo.addressLine1 || 'Unit 15/55 Anderson Road',
+    addressLine2: companyInfo.addressLine2 || 'SMEATON GRANGE',
+    addressLine3: companyInfo.addressLine3 || 'NSW 2560',
+    country: companyInfo.country || 'AUSTRALIA',
+    abn: companyInfo.abn || '14 690 181 858',
+    bank: companyInfo.bank || 'NAB',
+    accountName: companyInfo.accountName || 'AMP TILES PTY LTD',
+    bsb: companyInfo.bsb || '082-356',
+    accountNumber: companyInfo.accountNumber || '26-722-1347',
   };
 
+  const logoSrc = getLogoBase64();
   const inv = invoice;
-  const items = (inv.items || []).map(
+
+  const rowsHtml = (inv.items || []).map(
     (item) => `
     <tr>
-      <td class="product">${escapeHtml(item.productName)}</td>
-      <td class="unit">${escapeHtml(item.unitType || '')}</td>
-      <td class="qty">${escapeHtml(item.quantity)}</td>
-      <td class="rate">${formatCurrency(item.rate)}</td>
-      <td class="amount">${formatCurrency(item.lineTotal)}</td>
+      <td>${escapeHtml(item.productName)}</td>
+      <td>${escapeHtml(item.unitType || '')}</td>
+      <td class="center">${escapeHtml(formatQuantity(item.quantity))}</td>
+      <td class="right">${formatNumber(item.rate)}</td>
+      <td class="center">${item.taxPercent ? item.taxPercent + '%' : (inv.taxRate ? inv.taxRate + '%' : '10%')}</td>
+      <td class="right">${formatNumber(item.lineTotal)}</td>
     </tr>`
   ).join('');
 
   const subtotal = inv.subtotal ?? (inv.items || []).reduce((s, i) => s + (i.lineTotal || 0), 0);
   const discountAmount = inv.discountAmount ?? inv.discount ?? 0;
   const tax = inv.tax ?? 0;
-  const grandTotal = inv.grandTotal ?? subtotal - discountAmount + tax;
-  const afterDiscount = subtotal - discountAmount;
+  const baseTotal = subtotal - discountAmount + tax;
+  const parsedDeliveryCost = Number(inv.deliveryCost);
+  const fallbackDeliveryCost = Math.max(
+    0,
+    Math.round((Number(inv.grandTotal) - baseTotal) * 100) / 100
+  );
+  const deliveryCost = Number.isFinite(parsedDeliveryCost)
+    ? Math.max(0, parsedDeliveryCost)
+    : Number.isFinite(fallbackDeliveryCost)
+      ? fallbackDeliveryCost
+      : 295;
+  const grandTotal = Number.isFinite(Number(inv.grandTotal))
+    ? Number(inv.grandTotal)
+    : Math.round((baseTotal + deliveryCost) * 100) / 100;
+  const grandTotalCents = Math.max(0, toCents(grandTotal));
+  const paidCents = Math.max(0, Math.min(grandTotalCents, toCents(inv.amountPaid)));
+  const outstandingCents = Math.max(0, grandTotalCents - paidCents);
+  const computedPaymentStatus =
+    paidCents <= 0 ? 'unpaid' : paidCents >= grandTotalCents ? 'paid' : 'partially_paid';
+  const paymentStatus = inv.paymentStatus || computedPaymentStatus;
+  const paymentStatusLabel = getPaymentStatusLabel(paymentStatus);
+
+  const dueDateLabel = inv.dueDate ? formatDate(inv.dueDate) : 'N/A';
+  const taxRate = inv.taxRate || 10;
+
+  // Delivery row for the table
+  const deliveryRowHtml = deliveryCost > 0 ? `
+    <tr>
+      <td>Delivery Cost</td>
+      <td></td>
+      <td class="center">1</td>
+      <td class="right">${formatNumber(deliveryCost)}</td>
+      <td class="center">${taxRate}%</td>
+      <td class="right">${formatNumber(deliveryCost)}</td>
+    </tr>` : '';
 
   return `
 <!DOCTYPE html>
@@ -71,100 +143,328 @@ function buildInvoiceHtml(invoice, companyInfo = {}) {
 <head>
   <meta charset="utf-8">
   <style>
-    * { box-sizing: border-box; }
-    body { font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; color: #1a1a1a; margin: 0; padding: 40px; line-height: 1.4; }
-    .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #e5e5e5; padding-bottom: 24px; margin-bottom: 32px; }
-    .company h1 { margin: 0; font-size: 24px; color: #c7a864; }
-    .company p { margin: 4px 0; color: #555; font-size: 13px; }
-    .invoice-title { text-align: right; }
-    .invoice-title h2 { margin: 0 0 8px 0; font-size: 22px; }
-    .bill-to { margin-bottom: 32px; }
-    .bill-to h4 { margin: 0 0 12px 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #666; }
-    .bill-to .name { font-weight: 600; font-size: 15px; }
-    .bill-to p { margin: 4px 0; color: #444; font-size: 13px; }
-    .meta { text-align: right; margin-bottom: 32px; }
-    .meta-row { display: flex; justify-content: flex-end; gap: 12px; margin: 6px 0; font-size: 13px; }
-    .meta-row .label { color: #666; }
-    .meta-row .value { font-weight: 500; min-width: 120px; }
-    table.items { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
-    table.items th { text-align: left; padding: 12px 8px; border-bottom: 2px solid #333; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #444; }
-    table.items th.unit { min-width: 60px; }
-    table.items th.qty, table.items th.rate, table.items th.amount { text-align: right; }
-    table.items td { padding: 12px 8px; border-bottom: 1px solid #e5e5e5; }
-    table.items td.unit { font-size: 12px; color: #555; }
-    table.items td.qty, table.items td.rate, table.items td.amount { text-align: right; }
-    table.items .product { font-weight: 500; }
-    .totals { margin-left: auto; width: 280px; }
-    .totals .row { display: flex; justify-content: space-between; padding: 8px 0; font-size: 13px; }
-    .totals .row.subtotal { border-bottom: 1px solid #e5e5e5; }
-    .totals .row.grand { border-top: 2px solid #333; margin-top: 8px; padding-top: 12px; font-size: 18px; font-weight: 700; }
-    .totals .row.grand .value { color: #8b5cf6; }
-    .footer { margin-top: 48px; padding-top: 24px; border-top: 1px solid #e5e5e5; text-align: center; color: #666; font-size: 12px; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', Arial, Helvetica, sans-serif;
+      font-size: 13px;
+      color: #1a1a2e;
+      padding: 40px 45px;
+      line-height: 1.5;
+    }
+
+    /* ── Logo + Company Block (top-right) ── */
+    .top-section {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 10px;
+    }
+    .doc-title {
+      font-size: 28px;
+      font-weight: 800;
+      color: #1a1a2e;
+      letter-spacing: 1px;
+    }
+    .logo-company {
+      text-align: right;
+    }
+    .logo-company img {
+      height: 54px;
+      margin-bottom: 4px;
+    }
+
+    /* ── Header grid: customer left, meta+company right ── */
+    .header-grid {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 30px;
+      margin-bottom: 28px;
+    }
+    .customer-block {
+      flex: 1;
+      padding-top: 4px;
+    }
+    .customer-block .cust-name {
+      font-weight: 700;
+      font-size: 14px;
+      margin-bottom: 2px;
+    }
+    .customer-block p {
+      margin: 1px 0;
+      font-size: 12.5px;
+      color: #333;
+    }
+    .meta-company-table {
+      border-collapse: collapse;
+      font-size: 12.5px;
+    }
+    .meta-company-table td {
+      border: 1px solid #bbb;
+      padding: 5px 10px;
+      vertical-align: top;
+    }
+    .meta-company-table .label-col {
+      font-weight: 600;
+      color: #444;
+      white-space: nowrap;
+      background: #fafafa;
+    }
+    .meta-company-table .value-col {
+      min-width: 100px;
+    }
+    .meta-company-table .company-col {
+      font-weight: 600;
+      color: #1a1a2e;
+      min-width: 140px;
+    }
+
+    /* ── Items Table ── */
+    table.items {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 14px;
+      font-size: 12.5px;
+    }
+    table.items thead {
+      background: #f0f0f4;
+    }
+    table.items th {
+      padding: 9px 10px;
+      text-align: left;
+      font-weight: 700;
+      font-size: 11.5px;
+      color: #333;
+      border: 1px solid #bbb;
+    }
+    table.items th.center, table.items td.center { text-align: center; }
+    table.items th.right, table.items td.right { text-align: right; }
+    table.items td {
+      padding: 8px 10px;
+      border: 1px solid #ccc;
+      color: #1a1a2e;
+    }
+    table.items tbody tr:nth-child(even) {
+      background: #fafafa;
+    }
+
+    /* ── Totals ── */
+    .totals-wrapper {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 22px;
+    }
+    .totals-table {
+      border-collapse: collapse;
+      font-size: 13px;
+      min-width: 300px;
+    }
+    .totals-table td {
+      padding: 6px 12px;
+      border: 1px solid #bbb;
+    }
+    .totals-table .t-label {
+      text-align: right;
+      font-weight: 600;
+      color: #444;
+      background: #fafafa;
+    }
+    .totals-table .t-value {
+      text-align: right;
+      font-weight: 700;
+      min-width: 110px;
+    }
+    .totals-table .grand-row td {
+      background: #f0f0f4;
+      font-size: 14.5px;
+      font-weight: 800;
+      color: #1a1a2e;
+    }
+
+    /* ── Payment Status ── */
+    .payment-section {
+      margin-bottom: 18px;
+      padding: 12px 14px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      background: #fafafa;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12.5px;
+    }
+    .payment-section .ps-row {
+      display: flex;
+      gap: 20px;
+    }
+    .payment-section .ps-label {
+      color: #666;
+    }
+    .payment-section .ps-value {
+      font-weight: 700;
+    }
+    .badge {
+      display: inline-block;
+      padding: 3px 12px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .badge-paid { background: #dcfce7; color: #166534; }
+    .badge-partial { background: #fef3c7; color: #92400e; }
+    .badge-unpaid { background: #fee2e2; color: #991b1b; }
+
+    /* ── Footer / Bank ── */
+    .footer-block {
+      margin-top: 18px;
+      padding-top: 14px;
+      border-top: 2px solid #1a1a2e;
+    }
+    .footer-block p {
+      margin: 2px 0;
+      font-size: 12.5px;
+      color: #333;
+    }
+    .footer-block .due-date {
+      font-weight: 700;
+      font-size: 13.5px;
+      margin-bottom: 6px;
+      color: #1a1a2e;
+    }
+    .footer-note {
+      margin-top: 22px;
+      text-align: center;
+      font-size: 11.5px;
+      color: #888;
+    }
+    .notes-section {
+      margin-top: 14px;
+      padding: 10px 14px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 12.5px;
+      color: #444;
+      background: #fafafa;
+    }
+    .notes-section strong {
+      color: #222;
+    }
   </style>
 </head>
 <body>
-  <div class="header">
-    <div class="company">
-      <h1>${escapeHtml(company.name)}</h1>
-      <p>${escapeHtml(company.address)}</p>
-      <p>Phone: ${escapeHtml(company.phone)}</p>
-      <p>Email: ${escapeHtml(company.email)}</p>
-      <p>ABN: ${escapeHtml(company.abn)}</p>
-    </div>
-    <div class="invoice-title">
-      <h2>INVOICE</h2>
+
+  <!-- Logo + Title -->
+  <div class="top-section">
+    <div class="doc-title">TAX INVOICE</div>
+    <div class="logo-company">
+      ${logoSrc ? `<img src="${logoSrc}" alt="Logo" />` : ''}
     </div>
   </div>
 
-  <div style="display: flex; justify-content: space-between; gap: 40px; flex-wrap: wrap;">
-    <div class="bill-to">
-      <h4>Bill To</h4>
-      <p class="name">${escapeHtml(inv.customerName)}</p>
+  <!-- Customer + Meta + Company -->
+  <div class="header-grid">
+    <div class="customer-block">
+      <p class="cust-name">${escapeHtml(inv.customerName || '')}</p>
       ${inv.customerAddress ? `<p>${escapeHtml(inv.customerAddress)}</p>` : ''}
       ${inv.customerPhone ? `<p>${escapeHtml(inv.customerPhone)}</p>` : ''}
       ${inv.customerEmail ? `<p>${escapeHtml(inv.customerEmail)}</p>` : ''}
     </div>
-    <div class="meta">
-      <div class="meta-row"><span class="label">Invoice Number:</span><span class="value">${escapeHtml(inv.invoiceNumber)}</span></div>
-      <div class="meta-row"><span class="label">Invoice Date:</span><span class="value">${formatDate(inv.invoiceDate)}</span></div>
-      ${inv.dueDate ? `<div class="meta-row"><span class="label">Due Date:</span><span class="value">${formatDate(inv.dueDate)}</span></div>` : ''}
-      ${inv.quotation && inv.quotation.quotationNumber ? `<div class="meta-row"><span class="label">Quote Ref:</span><span class="value">${escapeHtml(inv.quotation.quotationNumber)}</span></div>` : ''}
-    </div>
+    <table class="meta-company-table">
+      <tr>
+        <td class="label-col">Invoice Date</td>
+        <td class="value-col">${escapeHtml(formatDate(inv.invoiceDate))}</td>
+        <td class="company-col" rowspan="5" style="vertical-align: top; line-height: 1.6;">
+          ${escapeHtml(company.name)}<br>
+          ${escapeHtml(company.addressLine1)}<br>
+          ${escapeHtml(company.addressLine2)}<br>
+          ${escapeHtml(company.addressLine3)}<br>
+          ${escapeHtml(company.country)}
+        </td>
+      </tr>
+      <tr>
+        <td class="label-col">Invoice Number</td>
+        <td class="value-col">${escapeHtml(inv.invoiceNumber || '')}</td>
+      </tr>
+      <tr>
+        <td class="label-col">Reference</td>
+        <td class="value-col">${inv.quotation && inv.quotation.quotationNumber ? escapeHtml(inv.quotation.quotationNumber) : (inv.reference ? escapeHtml(inv.reference) : '')}</td>
+      </tr>
+      <tr>
+        <td class="label-col">Status</td>
+        <td class="value-col">${escapeHtml(paymentStatusLabel)}</td>
+      </tr>
+      <tr>
+        <td class="label-col">ABN</td>
+        <td class="value-col">${escapeHtml(company.abn)}</td>
+      </tr>
+    </table>
   </div>
 
+  <!-- Items Table -->
   <table class="items">
     <thead>
       <tr>
-        <th class="product">Product</th>
-        <th class="unit">Unit</th>
-        <th class="qty">Qty</th>
-        <th class="rate">Rate</th>
-        <th class="amount">Amount</th>
+        <th>Description</th>
+        <th>Unit</th>
+        <th class="center">Quantity</th>
+        <th class="right">Unit Price</th>
+        <th class="center">GST</th>
+        <th class="right">Amount AUD</th>
       </tr>
     </thead>
-    <tbody>${items}</tbody>
+    <tbody>
+      ${rowsHtml}
+      ${deliveryRowHtml}
+    </tbody>
   </table>
 
-  <div class="totals">
-    <div class="row subtotal"><span>Subtotal</span><span>${formatCurrency(subtotal)}</span></div>
-    ${discountAmount > 0 ? `<div class="row"><span>Discount</span><span>-${formatCurrency(discountAmount)}</span></div>` : ''}
-    ${tax > 0 ? `<div class="row"><span>Tax (GST)</span><span>${formatCurrency(tax)}</span></div>` : ''}
-    <div class="row grand"><span>TOTAL</span><span class="value">${formatCurrency(grandTotal)}</span></div>
+  <!-- Totals -->
+  <div class="totals-wrapper">
+    <table class="totals-table">
+      <tr>
+        <td class="t-label">Subtotal</td>
+        <td class="t-value">${formatNumber(subtotal)}</td>
+      </tr>
+      ${discountAmount > 0 ? `<tr><td class="t-label">Discount</td><td class="t-value">-${formatNumber(discountAmount)}</td></tr>` : ''}
+      ${deliveryCost > 0 ? `<tr><td class="t-label">Delivery Cost</td><td class="t-value">${formatNumber(deliveryCost)}</td></tr>` : ''}
+      <tr>
+        <td class="t-label">TOTAL GST ${taxRate}%</td>
+        <td class="t-value">${formatNumber(tax)}</td>
+      </tr>
+      <tr class="grand-row">
+        <td class="t-label">TOTAL AUD</td>
+        <td class="t-value">${formatNumber(grandTotal)}</td>
+      </tr>
+    </table>
   </div>
 
-  <div class="footer">
-    <p>Thank you for your business!</p>
-    <p>This is a computer-generated invoice and does not require a signature.</p>
+  <!-- Payment Info -->
+  <div class="payment-section">
+    <div class="ps-row">
+      <span><span class="ps-label">Amount Received:</span> <span class="ps-value">${formatNumber(paidCents / 100)}</span></span>
+      <span><span class="ps-label">Outstanding:</span> <span class="ps-value">${formatNumber(outstandingCents / 100)}</span></span>
+    </div>
+    <span class="badge ${paymentStatus === 'paid' ? 'badge-paid' : paymentStatus === 'partially_paid' ? 'badge-partial' : 'badge-unpaid'}">${escapeHtml(paymentStatusLabel)}</span>
   </div>
+
+  <!-- Notes / Terms -->
+  ${inv.notes ? `<div class="notes-section"><strong>Notes:</strong> ${escapeHtml(inv.notes)}</div>` : ''}
+  ${inv.terms ? `<div class="notes-section" style="margin-top:8px;"><strong>Terms:</strong> ${escapeHtml(inv.terms)}</div>` : ''}
+
+  <!-- Bank Details + Due Date -->
+  <div class="footer-block">
+    <p class="due-date">Due Date: ${escapeHtml(dueDateLabel)}</p>
+    <p><strong>Account Name:</strong> ${escapeHtml(company.accountName)}</p>
+    <p><strong>BSB Number:</strong> ${escapeHtml(company.bsb)}</p>
+    <p><strong>Account Number:</strong> ${escapeHtml(company.accountNumber)}</p>
+  </div>
+
+  <p class="footer-note">This is a computer-generated invoice and does not require a signature.</p>
+
 </body>
 </html>`;
 }
 
-/**
- * Generate PDF buffer for an invoice document (plain object with invoice fields).
- * @param {Object} invoice - Invoice document (e.g. from Invoice.findById().lean() or toObject())
- * @returns {Promise<Buffer>}
- */
 async function generateInvoicePdf(invoice) {
   const puppeteer = getPuppeteer();
   const html = buildInvoiceHtml(invoice);
