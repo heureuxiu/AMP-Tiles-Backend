@@ -11,6 +11,15 @@ let sendEmail = async () => {
   throw new Error('Email service is not available');
 };
 
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function fallbackFormatDate(value) {
   if (!value) return 'N/A';
   const date = new Date(value);
@@ -30,22 +39,134 @@ function fallbackFormatCurrency(amount, currency = 'AUD') {
   }).format(num);
 }
 
+function roundMoney(value) {
+  return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+function getPurchaseOrderAmountSnapshot(purchaseOrder) {
+  const subtotal =
+    Number(purchaseOrder?.subtotal) ||
+    (purchaseOrder?.items || []).reduce((sum, item) => sum + (Number(item?.lineTotal) || 0), 0);
+  const tax = Number(purchaseOrder?.tax) || 0;
+  const parsedDelivery = Number(purchaseOrder?.deliveryCost);
+  const fallbackDelivery = Math.max(
+    0,
+    roundMoney(Number(purchaseOrder?.grandTotal) - subtotal - tax)
+  );
+  const deliveryCost = Number.isFinite(parsedDelivery)
+    ? Math.max(0, parsedDelivery)
+    : Number.isFinite(fallbackDelivery)
+      ? fallbackDelivery
+      : 0;
+  const grandTotal = Number.isFinite(Number(purchaseOrder?.grandTotal))
+    ? Number(purchaseOrder.grandTotal)
+    : subtotal + tax + deliveryCost;
+
+  return {
+    subtotal: roundMoney(subtotal),
+    tax: roundMoney(tax),
+    deliveryCost: roundMoney(deliveryCost),
+    grandTotal: roundMoney(grandTotal),
+  };
+}
+
+function getPurchaseOrderItemDetails(item) {
+  const product =
+    item && item.product && typeof item.product === 'object' ? item.product : null;
+  const productName = item?.productName || product?.name || 'Product';
+  const skuRaw = item?.sku ?? product?.sku;
+  const descriptionRaw = item?.description ?? product?.description;
+  const sizeRaw = product?.size ?? item?.size;
+
+  return {
+    productName,
+    sku: skuRaw ? String(skuRaw) : 'N/A',
+    description: descriptionRaw ? String(descriptionRaw) : 'N/A',
+    size: sizeRaw ? String(sizeRaw) : 'N/A',
+    unit: item?.unitType || 'N/A',
+    quantity: Number(item?.quantityOrdered) || 0,
+    rate: Number(item?.rate) || 0,
+    amount: Number(item?.lineTotal) || 0,
+  };
+}
+
 function buildFallbackPurchaseOrderEmail(purchaseOrder) {
   const poNumber = purchaseOrder.poNumber || String(purchaseOrder._id || '');
   const supplierName = purchaseOrder.supplierName || purchaseOrder.supplier?.name || 'Supplier';
   const poDate = fallbackFormatDate(purchaseOrder.poDate);
-  const grandTotal = fallbackFormatCurrency(
-    purchaseOrder.grandTotal,
-    purchaseOrder.currency || 'AUD'
-  );
+  const expectedDelivery = purchaseOrder.expectedDeliveryDate
+    ? fallbackFormatDate(purchaseOrder.expectedDeliveryDate)
+    : 'N/A';
+  const currency = purchaseOrder.currency || 'AUD';
+  const amounts = getPurchaseOrderAmountSnapshot(purchaseOrder);
+  const grandTotal = fallbackFormatCurrency(amounts.grandTotal, currency);
+
+  const rowsHtml = (purchaseOrder.items || [])
+    .map((item) => {
+      const details = getPurchaseOrderItemDetails(item);
+      return `<tr>
+        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.productName)}</td>
+        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.sku)}</td>
+        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.description)}</td>
+        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.size)}</td>
+        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.unit)}</td>
+        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${details.quantity}</td>
+        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${fallbackFormatCurrency(details.rate, currency)}</td>
+        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${fallbackFormatCurrency(details.amount, currency)}</td>
+      </tr>`;
+    })
+    .join('');
+  const totalsRowsHtml = [
+    `<tr>
+      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Subtotal</td>
+      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${escapeHtml(
+        fallbackFormatCurrency(amounts.subtotal, currency)
+      )}</td>
+    </tr>`,
+    `<tr>
+      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Tax (GST)</td>
+      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${escapeHtml(
+        fallbackFormatCurrency(amounts.tax, currency)
+      )}</td>
+    </tr>`,
+    `<tr>
+      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Delivery Cost</td>
+      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${escapeHtml(
+        fallbackFormatCurrency(amounts.deliveryCost, currency)
+      )}</td>
+    </tr>`,
+    `<tr>
+      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:700;">Grand Total</td>
+      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:700;">${escapeHtml(
+        grandTotal
+      )}</td>
+    </tr>`,
+  ].join('');
+  const notesLine = purchaseOrder.notes ? `\nNotes: ${purchaseOrder.notes}` : '';
+  const termsLine = purchaseOrder.terms ? `\nTerms: ${purchaseOrder.terms}` : '';
 
   const text = [
     `Purchase Order ${poNumber}`,
     `Dear ${supplierName},`,
     '',
     'Please find the purchase order details below.',
+    `PO Number: ${poNumber}`,
     `PO Date: ${poDate}`,
+    `Expected Delivery Date: ${expectedDelivery}`,
+    `Subtotal: ${fallbackFormatCurrency(amounts.subtotal, currency)}`,
+    `Tax (GST): ${fallbackFormatCurrency(amounts.tax, currency)}`,
+    `Delivery Cost: ${fallbackFormatCurrency(amounts.deliveryCost, currency)}`,
     `Grand Total: ${grandTotal}`,
+    '',
+    'Items:',
+    ...(purchaseOrder.items || []).map((item) => {
+      const details = getPurchaseOrderItemDetails(item);
+      return `- ${details.productName} | SKU: ${details.sku} | Desc: ${details.description} | Size: ${details.size} | Unit: ${details.unit} | Qty: ${details.quantity} | Rate: ${fallbackFormatCurrency(details.rate, currency)} | Amount: ${fallbackFormatCurrency(details.amount, currency)}`;
+    }),
+    '',
+    'Please see attached purchase order PDF for your records.',
+    notesLine,
+    termsLine,
     '',
     'Thank you,',
     'AMP Tiles',
@@ -53,10 +174,52 @@ function buildFallbackPurchaseOrderEmail(purchaseOrder) {
 
   const html = `
     <div style="font-family: Arial, sans-serif; color: #111827; line-height: 1.4;">
-      <h2>Purchase Order ${poNumber}</h2>
-      <p>Dear ${supplierName},</p>
+      <h2>Purchase Order ${escapeHtml(poNumber)}</h2>
+      <p>Dear ${escapeHtml(supplierName)},</p>
       <p>Please find the purchase order details below.</p>
-      <p><strong>PO Date:</strong> ${poDate}<br/><strong>Grand Total:</strong> ${grandTotal}</p>
+      <p>
+        <strong>PO Number:</strong> ${escapeHtml(poNumber)}<br/>
+        <strong>PO Date:</strong> ${escapeHtml(poDate)}<br/>
+        <strong>Expected Delivery Date:</strong> ${escapeHtml(expectedDelivery)}<br/>
+        <strong>Subtotal:</strong> ${escapeHtml(
+          fallbackFormatCurrency(amounts.subtotal, currency)
+        )}<br/>
+        <strong>Tax (GST):</strong> ${escapeHtml(
+          fallbackFormatCurrency(amounts.tax, currency)
+        )}<br/>
+        <strong>Delivery Cost:</strong> ${escapeHtml(
+          fallbackFormatCurrency(amounts.deliveryCost, currency)
+        )}<br/>
+        <strong>Grand Total:</strong> ${escapeHtml(grandTotal)}
+      </p>
+
+      <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+        <thead>
+          <tr>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Product</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">SKU</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Description</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Size</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Unit</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:right;">Qty</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:right;">Rate</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:right;">Amount</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml}${totalsRowsHtml}</tbody>
+      </table>
+
+      ${
+        purchaseOrder.notes
+          ? `<p><strong>Notes:</strong> ${escapeHtml(purchaseOrder.notes)}</p>`
+          : ''
+      }
+      ${
+        purchaseOrder.terms
+          ? `<p><strong>Terms:</strong> ${escapeHtml(purchaseOrder.terms)}</p>`
+          : ''
+      }
+
       <p>Thank you,<br/>AMP Tiles</p>
     </div>
   `;
@@ -105,6 +268,69 @@ if (
   ({ buildPurchaseOrderEmail } = purchaseOrderEmailModule);
 } else if (process.env.NODE_ENV !== 'production') {
   console.warn('Purchase order email template utility not found. Using fallback template.');
+}
+
+function normalizeEmail(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase();
+}
+
+function summarizeEmailError(error, fallbackMessage = 'Failed to send purchase order email') {
+  return [
+    error?.message || fallbackMessage,
+    error?.code ? `code=${error.code}` : '',
+    error?.command ? `command=${error.command}` : '',
+    error?.responseCode ? `responseCode=${error.responseCode}` : '',
+  ]
+    .filter(Boolean)
+    .join(' | ');
+}
+
+async function sendPurchaseOrderEmailWithAttachment(purchaseOrderDoc) {
+  const purchaseOrder = purchaseOrderDoc?.toObject
+    ? purchaseOrderDoc.toObject()
+    : purchaseOrderDoc;
+  if (!purchaseOrder) {
+    const error = new Error('Purchase order not found');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const supplierEmail = normalizeEmail(purchaseOrder?.supplier?.email);
+  if (!supplierEmail) {
+    const error = new Error(
+      'Supplier email is missing. Please add supplier email before sending purchase order.'
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const pdfBuffer = await generatePurchaseOrderPdf(purchaseOrder);
+  const emailPayload = buildPurchaseOrderEmail(purchaseOrder);
+  const poRef = String(purchaseOrder.poNumber || purchaseOrder._id || 'purchase-order').replace(
+    /\s/g,
+    '-'
+  );
+
+  await sendEmail({
+    to: supplierEmail,
+    subject: emailPayload.subject,
+    text: emailPayload.text,
+    html: emailPayload.html,
+    attachments: [
+      {
+        filename: `purchase-order-${poRef}.pdf`,
+        content: pdfBuffer,
+        contentType: 'application/pdf',
+      },
+    ],
+  });
+
+  return {
+    supplierEmail,
+    emailPayload,
+  };
 }
 
 function normalizeText(value) {
@@ -173,7 +399,7 @@ exports.getPurchaseOrders = async (req, res) => {
     const purchaseOrders = await PurchaseOrder.find(query)
       .populate('supplier', 'name supplierNumber')
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku unit tilesPerBox coveragePerBox coveragePerBoxUnit')
+      .populate('items.product', 'name sku description size unit tilesPerBox coveragePerBox coveragePerBoxUnit')
       .sort(sortObj);
 
     const statuses = [
@@ -219,7 +445,7 @@ exports.getPurchaseOrder = async (req, res) => {
     const purchaseOrder = await PurchaseOrder.findById(req.params.id)
       .populate('supplier')
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku unit tilesPerBox coveragePerBox coveragePerBoxUnit');
+      .populate('items.product', 'name sku description size unit tilesPerBox coveragePerBox coveragePerBoxUnit');
 
     if (!purchaseOrder) {
       return res.status(404).json({
@@ -251,7 +477,8 @@ function buildItem(product, item, forcedRate) {
       : Number(item.rate) || 0;
   const rate = Math.round(chosenRate * 100) / 100;
   const discount = Number(item.discountPercent) || 0;
-  const tax = Number(item.taxPercent) || 0;
+  const parsedTax = Number(item.taxPercent);
+  const tax = Number.isFinite(parsedTax) ? parsedTax : 10;
   const afterDiscount = qty * rate * (1 - discount / 100);
   const lineTotal = Math.round(afterDiscount * (1 + tax / 100) * 100) / 100;
   let coverageSqm = null;
@@ -265,6 +492,7 @@ function buildItem(product, item, forcedRate) {
     product: product._id,
     productName: product.name,
     sku: product.sku || '',
+    size: String(product.size ?? item.size ?? ''),
     unitType: item.unitType || 'Box',
     quantityOrdered: qty,
     rate,
@@ -327,7 +555,7 @@ exports.createPurchaseOrder = async (req, res) => {
           message: 'Each item must have product and quantityOrdered',
         });
       }
-      const product = await Product.findById(item.product).select('name sku supplier supplierName coveragePerBox coveragePerBoxUnit tilesPerBox costPrice');
+      const product = await Product.findById(item.product).select('name sku size supplier supplierName coveragePerBox coveragePerBoxUnit tilesPerBox costPrice');
       if (!product) {
         return res.status(404).json({
           success: false,
@@ -366,7 +594,10 @@ exports.createPurchaseOrder = async (req, res) => {
     });
 
     await purchaseOrder.populate('supplier');
-    await purchaseOrder.populate('items.product', 'name sku tilesPerBox coveragePerBox coveragePerBoxUnit');
+    await purchaseOrder.populate(
+      'items.product',
+      'name sku description size tilesPerBox coveragePerBox coveragePerBoxUnit'
+    );
 
     res.status(201).json({
       success: true,
@@ -468,7 +699,7 @@ exports.updatePurchaseOrder = async (req, res) => {
             message: 'Each item must have product and quantityOrdered',
           });
         }
-        const product = await Product.findById(item.product).select('name sku supplier supplierName coveragePerBox coveragePerBoxUnit tilesPerBox costPrice');
+        const product = await Product.findById(item.product).select('name sku size supplier supplierName coveragePerBox coveragePerBoxUnit tilesPerBox costPrice');
         if (!product) {
           return res.status(404).json({
             success: false,
@@ -501,7 +732,10 @@ exports.updatePurchaseOrder = async (req, res) => {
 
     await purchaseOrder.save();
     await purchaseOrder.populate('supplier');
-    await purchaseOrder.populate('items.product', 'name sku tilesPerBox coveragePerBox coveragePerBoxUnit');
+    await purchaseOrder.populate(
+      'items.product',
+      'name sku description size tilesPerBox coveragePerBox coveragePerBoxUnit'
+    );
 
     res.status(200).json({
       success: true,
@@ -527,7 +761,7 @@ exports.getPurchaseOrderPdf = async (req, res) => {
       .populate('supplier', 'name email phone contactPerson supplierNumber')
       .populate(
         'items.product',
-        'name sku unit tilesPerBox coveragePerBox coveragePerBoxUnit'
+        'name sku description size unit tilesPerBox coveragePerBox coveragePerBoxUnit'
       )
       .lean();
 
@@ -567,7 +801,7 @@ exports.sendPurchaseOrderToSupplier = async (req, res) => {
       .populate('createdBy', 'name email')
       .populate(
         'items.product',
-        'name sku unit tilesPerBox coveragePerBox coveragePerBoxUnit'
+        'name sku description size unit tilesPerBox coveragePerBox coveragePerBoxUnit'
       );
 
     if (!purchaseOrder) {
@@ -591,9 +825,7 @@ exports.sendPurchaseOrderToSupplier = async (req, res) => {
       });
     }
 
-    const supplierEmail = String(purchaseOrder.supplier.email || '')
-      .trim()
-      .toLowerCase();
+    const supplierEmail = normalizeEmail(purchaseOrder.supplier.email);
     if (!supplierEmail) {
       return res.status(400).json({
         success: false,
@@ -602,13 +834,7 @@ exports.sendPurchaseOrderToSupplier = async (req, res) => {
       });
     }
 
-    const emailPayload = buildPurchaseOrderEmail(purchaseOrder);
-    await sendEmail({
-      to: supplierEmail,
-      subject: emailPayload.subject,
-      text: emailPayload.text,
-      html: emailPayload.html,
-    });
+    await sendPurchaseOrderEmailWithAttachment(purchaseOrder);
 
     if (purchaseOrder.status !== 'sent_to_supplier') {
       purchaseOrder.status = 'sent_to_supplier';
@@ -617,7 +843,7 @@ exports.sendPurchaseOrderToSupplier = async (req, res) => {
       await purchaseOrder.populate('createdBy', 'name email');
       await purchaseOrder.populate(
         'items.product',
-        'name sku unit tilesPerBox coveragePerBox coveragePerBoxUnit'
+        'name sku description size unit tilesPerBox coveragePerBox coveragePerBoxUnit'
       );
     }
 
@@ -628,17 +854,9 @@ exports.sendPurchaseOrderToSupplier = async (req, res) => {
       purchaseOrder,
     });
   } catch (error) {
-    const details = [
-      error?.message || 'Failed to send purchase order email',
-      error?.code ? `code=${error.code}` : '',
-      error?.command ? `command=${error.command}` : '',
-      error?.responseCode ? `responseCode=${error.responseCode}` : '',
-    ]
-      .filter(Boolean)
-      .join(' | ');
-
+    const details = summarizeEmailError(error);
     console.error('Error sending purchase order email:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message: details || 'Failed to send purchase order email',
     });
@@ -755,7 +973,10 @@ exports.receivePurchaseOrder = async (req, res) => {
 
     await purchaseOrder.save();
     await purchaseOrder.populate('supplier');
-    await purchaseOrder.populate('items.product', 'name sku tilesPerBox coveragePerBox coveragePerBoxUnit');
+    await purchaseOrder.populate(
+      'items.product',
+      'name sku description size tilesPerBox coveragePerBox coveragePerBoxUnit'
+    );
 
     const message = applyStockUpdate
       ? 'Goods receiving updated and stock increased for received quantities'
@@ -853,3 +1074,5 @@ exports.getPurchaseOrderStats = async (req, res) => {
     });
   }
 };
+
+
