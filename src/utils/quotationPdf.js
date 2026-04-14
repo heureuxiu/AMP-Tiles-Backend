@@ -34,6 +34,39 @@ function formatQuantity(value) {
   return rounded.toFixed(3).replace(/\.?0+$/, '');
 }
 
+const SQFT_PER_SQM = 10.764;
+
+function getDisplayQuantity(item) {
+  const unitType = String(item?.unitType || '').toLowerCase();
+  const coverageSqm = Number(item?.coverageSqm);
+  if (Number.isFinite(coverageSqm) && coverageSqm > 0) {
+    if (
+      unitType.includes('sqft') ||
+      unitType.includes('sq ft') ||
+      unitType.includes('sqfeet')
+    ) {
+      return formatQuantity(coverageSqm * SQFT_PER_SQM);
+    }
+    if (
+      unitType.includes('sqm') ||
+      unitType.includes('sq meter') ||
+      unitType.includes('sqmetre')
+    ) {
+      return formatQuantity(coverageSqm);
+    }
+  }
+  return formatQuantity(item?.quantity ?? 0);
+}
+
+function getItemSize(item) {
+  const rawSize = item?.product?.size ?? item?.size;
+  return rawSize ? String(rawSize) : '';
+}
+
+function getDeliveryAddress(source) {
+  return String(source?.deliveryAddress || source?.customerAddress || '').trim();
+}
+
 function getLogoBase64() {
   try {
     const logoPath = path.resolve(__dirname, '../../../client/public/assets/AMP-TILES-LOGO.png');
@@ -60,14 +93,16 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
 
   const logoSrc = getLogoBase64();
   const quote = quotation;
+  const deliveryAddress = getDeliveryAddress(quote);
 
   const rowsHtml = (quote.items || [])
     .map(
       (item) => `
     <tr>
       <td>${escapeHtml(item.productName || item.product?.name || '')}</td>
+      <td>${escapeHtml(getItemSize(item))}</td>
       <td>${escapeHtml(item.unitType || '')}</td>
-      <td class="center">${escapeHtml(formatQuantity(item.quantity ?? 0))}</td>
+      <td class="center">${escapeHtml(getDisplayQuantity(item))}</td>
       <td class="right">${formatNumber(item.rate)}</td>
       <td class="center">${item.taxPercent ? item.taxPercent + '%' : (quote.taxRate ? quote.taxRate + '%' : '10%')}</td>
       <td class="right">${formatNumber(item.lineTotal)}</td>
@@ -88,7 +123,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
     ? Math.max(0, parsedDeliveryCost)
     : Number.isFinite(fallbackDeliveryCost)
       ? fallbackDeliveryCost
-      : 295;
+      : 0;
   const grandTotal = Number.isFinite(Number(quote.grandTotal))
     ? Number(quote.grandTotal)
     : Math.round((baseTotal + deliveryCost) * 100) / 100;
@@ -101,6 +136,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
   const deliveryRowHtml = deliveryCost > 0 ? `
     <tr>
       <td>Delivery Cost</td>
+      <td></td>
       <td></td>
       <td class="center">1</td>
       <td class="right">${formatNumber(deliveryCost)}</td>
@@ -298,7 +334,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
   <div class="header-grid">
     <div class="customer-block">
       <p class="cust-name">${escapeHtml(quote.customerName || '')}</p>
-      ${quote.customerAddress ? `<p>${escapeHtml(quote.customerAddress)}</p>` : ''}
+      ${deliveryAddress ? `<p><strong>Delivery Address:</strong> ${escapeHtml(deliveryAddress)}</p>` : ''}
       ${quote.customerPhone ? `<p>${escapeHtml(quote.customerPhone)}</p>` : ''}
       ${quote.customerEmail ? `<p>${escapeHtml(quote.customerEmail)}</p>` : ''}
     </div>
@@ -338,6 +374,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
     <thead>
       <tr>
         <th>Description</th>
+        <th>Size</th>
         <th>Unit</th>
         <th class="center">Quantity</th>
         <th class="right">Unit Price</th>
