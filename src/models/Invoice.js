@@ -11,6 +11,11 @@ const invoiceItemSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  size: {
+    type: String,
+    trim: true,
+    default: '',
+  },
   unitType: {
     type: String,
     enum: ['Box', 'Sq Ft', 'Sq Meter', 'Piece'],
@@ -34,7 +39,7 @@ const invoiceItemSchema = new mongoose.Schema({
   },
   taxPercent: {
     type: Number,
-    default: 0,
+    default: 10,
     min: 0,
     max: 100,
   },
@@ -53,7 +58,7 @@ const invoiceItemSchema = new mongoose.Schema({
 function calcLineTotal(item) {
   const base = (item.quantity || 0) * (item.rate || 0);
   const afterDiscount = base * (1 - (item.discountPercent || 0) / 100);
-  return Math.round(afterDiscount * (1 + (item.taxPercent || 0) / 100) * 100) / 100;
+  return Math.round(afterDiscount * (1 + ((item.taxPercent ?? 10) / 100)) * 100) / 100;
 }
 
 function toCents(value) {
@@ -91,6 +96,7 @@ const invoiceSchema = new mongoose.Schema(
     customerPhone: { type: String, trim: true },
     customerEmail: { type: String, trim: true, lowercase: true },
     customerAddress: { type: String, trim: true },
+    deliveryAddress: { type: String, trim: true },
     invoiceDate: { type: Date, default: Date.now },
     dueDate: { type: Date },
     items: {
@@ -108,7 +114,7 @@ const invoiceSchema = new mongoose.Schema(
     discountAmount: { type: Number, default: 0, min: 0 },
     tax: { type: Number, default: 0, min: 0 },
     taxRate: { type: Number, default: 10, min: 0 },
-    deliveryCost: { type: Number, default: 295, min: 0 },
+    deliveryCost: { type: Number, default: 0, min: 0 },
     grandTotal: { type: Number, default: 0, min: 0 },
 
     // Invoice lifecycle: stock reduces only when confirmed or delivered
@@ -171,7 +177,7 @@ invoiceSchema.pre('save', function () {
   const parsedDeliveryCost = Number(this.deliveryCost);
   const normalizedDeliveryCost = Number.isFinite(parsedDeliveryCost)
     ? Math.max(0, parsedDeliveryCost)
-    : 295;
+    : 0;
   this.deliveryCost = Math.round(normalizedDeliveryCost * 100) / 100;
 
   if (this.items && this.items.length > 0) {
@@ -185,7 +191,7 @@ invoiceSchema.pre('save', function () {
       this.discountAmount = 0;
     }
     const taxableAmount = this.subtotal - this.discountAmount;
-    this.tax = (taxableAmount * (this.taxRate || 0)) / 100;
+    this.tax = (taxableAmount * (this.taxRate ?? 10)) / 100;
     this.grandTotal = Math.round((taxableAmount + this.tax + this.deliveryCost) * 100) / 100;
   }
   // Remaining balance and payment status
