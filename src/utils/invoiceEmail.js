@@ -1,313 +1,496 @@
-function escapeHtml(value) {
-  return String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
+  const { getPuppeteer, launchPuppeteerBrowser } = require('./puppeteerLauncher');
 
-function formatDate(value) {
-  if (!value) return 'N/A';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'N/A';
-  return date.toLocaleDateString('en-AU', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  });
-}
+  function escapeHtml(text) {
+    if (text == null) return '';
+    const s = String(text);
+    return s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
 
-function formatCurrency(amount) {
-  const num = Number(amount) || 0;
-  return new Intl.NumberFormat('en-AU', {
-    style: 'currency',
-    currency: 'AUD',
-  }).format(num);
-}
+  function formatNumber(amount) {
+    return new Intl.NumberFormat('en-AU', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(Number(amount) || 0);
+  }
 
-function toCents(value) {
-  return Math.round((Number(value) || 0) * 100);
-}
+  function formatDate(date) {
+    if (!date) return '';
+    const d = new Date(date);
+    if (Number.isNaN(d.getTime())) return '';
+    const day = d.getDate();
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return `${day} ${months[d.getMonth()]} ${d.getFullYear()}`;
+  }
 
-const DEFAULT_DELIVERY_COST = 0;
-const COMPANY_DETAILS = {
-  name: 'AMP TILES PTY LTD',
-  abn: '14 690 181 858',
-  address: 'Unit 15/55 Anderson Road, Smeaton Grange, NSW 2560',
-};
-const BANK_DETAILS = {
-  bank: 'NAB',
-  accountName: 'AMP TILES PTY LTD',
-  bsb: '082-356',
-  accountNumber: '26-722-1347',
-};
+  function toCents(value) {
+    return Math.round((Number(value) || 0) * 100);
+  }
 
-function getInvoiceAmountSnapshot(invoice) {
-  const subtotal = Number(invoice?.subtotal) || 0;
-  const discountAmount = Number(invoice?.discountAmount ?? invoice?.discount) || 0;
-  const taxAmount = Number(invoice?.tax) || 0;
-  const baseTotal = subtotal - discountAmount + taxAmount;
-  const parsedDelivery = Number(invoice?.deliveryCost);
-  const fallbackDelivery = Math.max(0, Math.round((Number(invoice?.grandTotal) - baseTotal) * 100) / 100);
-  const deliveryCost = Number.isFinite(parsedDelivery)
-    ? Math.max(0, parsedDelivery)
-    : Number.isFinite(fallbackDelivery)
-      ? fallbackDelivery
-      : DEFAULT_DELIVERY_COST;
-  const grandTotal = Number.isFinite(Number(invoice?.grandTotal))
-    ? Number(invoice.grandTotal)
-    : baseTotal + deliveryCost;
+  function getPaymentStatusLabel(status) {
+    if (status === 'paid') return 'Fully Paid';
+    if (status === 'partially_paid') return 'Partially Paid';
+    if (status === 'unpaid') return 'Unpaid';
+    return String(status || 'Unpaid')
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+  }
 
-  return {
-    subtotal: Math.round(subtotal * 100) / 100,
-    discountAmount: Math.round(discountAmount * 100) / 100,
-    taxAmount: Math.round(taxAmount * 100) / 100,
-    deliveryCost: Math.round(deliveryCost * 100) / 100,
-    grandTotal: Math.round(grandTotal * 100) / 100,
-  };
-}
+  function formatQuantity(value) {
+    const numeric = Number(value) || 0;
+    const rounded = Math.round(numeric * 1000) / 1000;
+    if (Number.isInteger(rounded)) return String(rounded);
+    return rounded.toFixed(3).replace(/\.?0+$/, '');
+  }
 
-function getPaymentSnapshot(invoice) {
-  const amounts = getInvoiceAmountSnapshot(invoice);
-  const totalCents = Math.max(0, toCents(amounts.grandTotal));
-  const paidCents = Math.max(0, Math.min(totalCents, toCents(invoice?.amountPaid)));
-  const remainingCents = Math.max(0, totalCents - paidCents);
-  const paidPercent = totalCents > 0 ? Math.round((paidCents / totalCents) * 100) : 0;
+  function getItemSize(item) {
+    const rawSize = item?.product?.size ?? item?.size;
+    return rawSize ? String(rawSize) : '';
+  }
 
-  const paymentStatus =
-    paidCents <= 0
-      ? 'unpaid'
-      : paidCents >= totalCents
-        ? 'paid'
-        : 'partially_paid';
+  function getItemSku(item) {
+    const rawSku = item?.sku ?? item?.product?.sku;
+    return rawSku ? String(rawSku) : '';
+  }
 
-  return {
-    amounts,
-    totalCents,
-    paidCents,
-    remainingCents,
-    paidPercent,
-    paymentStatus,
-  };
-}
+  function getDeliveryAddress(source) {
+    return String(source?.deliveryAddress || source?.customerAddress || '').trim();
+  }
 
-function getDeliveryAddress(source) {
-  return String(source?.deliveryAddress || source?.customerAddress || '').trim();
-}
+  function getLogoBase64() {
+    try {
+      const logoPath = path.resolve(__dirname, '../../../client/public/assets/AMP-TILES-LOGO.png');
+      const logoBuffer = fs.readFileSync(logoPath);
+      return `data:image/png;base64,${logoBuffer.toString('base64')}`;
+    } catch (e) {
+      return '';
+    }
+  }
 
-function getInvoiceItemDetails(item) {
-  const product =
-    item && item.product && typeof item.product === 'object' ? item.product : null;
-  const productName = item?.productName || product?.name || 'Product';
-  const skuRaw = item?.sku ?? product?.sku;
-  const descriptionRaw = item?.description ?? product?.description;
-  const sizeRaw = product?.size ?? item?.size;
+  function buildInvoiceHtml(invoice, companyInfo = {}) {
+    const company = {
+      name: companyInfo.name || 'AMP TILES PTY LTD',
+      addressLine1: companyInfo.addressLine1 || 'Unit 15/55 Anderson Road',
+      addressLine2: companyInfo.addressLine2 || 'SMEATON GRANGE',
+      addressLine3: companyInfo.addressLine3 || 'NSW 2560',
+      country: companyInfo.country || 'AUSTRALIA',
+      abn: companyInfo.abn || '14 690 181 858',
+      bank: companyInfo.bank || 'NAB',
+      accountName: companyInfo.accountName || 'AMP TILES PTY LTD',
+      bsb: companyInfo.bsb || '082-356',
+      accountNumber: companyInfo.accountNumber || '26-722-1347',
+    };
 
-  return {
-    productName,
-    sku: skuRaw ? String(skuRaw) : 'N/A',
-    description: descriptionRaw ? String(descriptionRaw) : 'N/A',
-    size: sizeRaw ? String(sizeRaw) : 'N/A',
-    unit: item?.unitType || 'N/A',
-    quantity: Number(item?.quantity) || 0,
-    rate: Number(item?.rate) || 0,
-    amount: Number(item?.lineTotal) || 0,
-  };
-}
+    const logoSrc = getLogoBase64();
+    const inv = invoice;
+    const deliveryAddress = getDeliveryAddress(inv);
 
-function buildInvoiceEmail(invoice) {
-  const invoiceNo = invoice.invoiceNumber || String(invoice._id || '');
-  const customerName = invoice.customerName || 'Customer';
-  const deliveryAddress = getDeliveryAddress(invoice);
-  const payment = getPaymentSnapshot(invoice);
+    const rowsHtml = (inv.items || []).map(
+      (item) => `
+      <tr>
+        <td>${escapeHtml(item.productName)}</td>
+        <td>${escapeHtml(getItemSku(item))}</td>
+        <td>${escapeHtml(getItemSize(item))}</td>
+        <td>${escapeHtml(item.unitType || '')}</td>
+        <td class="center">${escapeHtml(formatQuantity(item.quantity))}</td>
+        <td class="right">${formatNumber(item.rate)}</td>
+        <td class="center">${item.taxPercent ? item.taxPercent + '%' : (inv.taxRate ? inv.taxRate + '%' : '10%')}</td>
+        <td class="right">${formatNumber(item.lineTotal)}</td>
+      </tr>`
+    ).join('');
 
-  const isFinalReceipt = payment.paymentStatus === 'paid';
-  const paymentStatusLabel = isFinalReceipt
-    ? 'Fully Paid'
-    : payment.paymentStatus === 'partially_paid'
-      ? 'Partially Paid'
-      : 'Unpaid';
+    const subtotal = inv.subtotal ?? (inv.items || []).reduce((s, i) => s + (i.lineTotal || 0), 0);
+    const discountAmount = inv.discountAmount ?? inv.discount ?? 0;
+    const tax = inv.tax ?? 0;
+    const baseTotal = subtotal - discountAmount + tax;
+    const parsedDeliveryCost = Number(inv.deliveryCost);
+    const fallbackDeliveryCost = Math.max(
+      0,
+      Math.round((Number(inv.grandTotal) - baseTotal) * 100) / 100
+    );
+    const deliveryCost = Number.isFinite(parsedDeliveryCost)
+      ? Math.max(0, parsedDeliveryCost)
+      : Number.isFinite(fallbackDeliveryCost)
+        ? fallbackDeliveryCost
+        : 0;
+    const grandTotal = Number.isFinite(Number(inv.grandTotal))
+      ? Number(inv.grandTotal)
+      : Math.round((baseTotal + deliveryCost) * 100) / 100;
+    const grandTotalCents = Math.max(0, toCents(grandTotal));
+    const paidCents = Math.max(0, Math.min(grandTotalCents, toCents(inv.amountPaid)));
+    const outstandingCents = Math.max(0, grandTotalCents - paidCents);
+    const computedPaymentStatus =
+      paidCents <= 0 ? 'unpaid' : paidCents >= grandTotalCents ? 'paid' : 'partially_paid';
+    const paymentStatus = inv.paymentStatus || computedPaymentStatus;
+    const paymentStatusLabel = getPaymentStatusLabel(paymentStatus);
 
-  const subject = isFinalReceipt
-    ? `Payment received in full for Invoice ${invoiceNo}`
-    : `Updated Invoice ${invoiceNo} from ${COMPANY_DETAILS.name}`;
+    const dueDateLabel = inv.dueDate ? formatDate(inv.dueDate) : 'N/A';
+    const taxRate = inv.taxRate || 10;
 
-  const intro = isFinalReceipt
-    ? 'Thank you. We confirm this invoice is now fully paid.'
-    : 'Please find your latest updated invoice and payment status below.';
+    // Delivery row for the table
+    const deliveryRowHtml = deliveryCost > 0 ? `
+      <tr>
+        <td>Delivery Cost</td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td class="center">1</td>
+        <td class="right">${formatNumber(deliveryCost)}</td>
+        <td class="center">${taxRate}%</td>
+        <td class="right">${formatNumber(deliveryCost)}</td>
+      </tr>` : '';
 
-  const rowsHtml = (invoice.items || [])
-    .map((item) => {
-      const details = getInvoiceItemDetails(item);
-      return `<tr>
-        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.productName)}</td>
-        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.sku)}</td>
-        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.description)}</td>
-        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.size)}</td>
-        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.unit)}</td>
-        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${details.quantity}</td>
-        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${formatCurrency(details.rate)}</td>
-        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${formatCurrency(details.amount)}</td>
-      </tr>`;
-    })
-    .join('');
-  const totalsRowsHtml = [
-    `<tr>
-      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Subtotal</td>
-      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${escapeHtml(formatCurrency(payment.amounts.subtotal))}</td>
-    </tr>`,
-    payment.amounts.discountAmount > 0
-      ? `<tr>
-          <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Discount</td>
-          <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">-${escapeHtml(formatCurrency(payment.amounts.discountAmount))}</td>
-        </tr>`
-      : '',
-    `<tr>
-      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Tax (GST)</td>
-      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${escapeHtml(formatCurrency(payment.amounts.taxAmount))}</td>
-    </tr>`,
-    `<tr>
-      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Delivery Cost</td>
-      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${escapeHtml(formatCurrency(payment.amounts.deliveryCost))}</td>
-    </tr>`,
-    `<tr>
-      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:700;">Grand Total</td>
-      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:700;">${escapeHtml(formatCurrency(payment.amounts.grandTotal))}</td>
-    </tr>`,
-  ]
-    .filter(Boolean)
-    .join('');
-
-  const text = [
-    `Invoice ${invoiceNo}`,
-    `Dear ${customerName},`,
-    '',
-    intro,
-    '',
-    `Invoice Date: ${formatDate(invoice.invoiceDate)}`,
-    `Due Date: ${invoice.dueDate ? formatDate(invoice.dueDate) : 'N/A'}`,
-    deliveryAddress ? `Delivery Address: ${deliveryAddress}` : '',
-    `Subtotal: ${formatCurrency(payment.amounts.subtotal)}`,
-    payment.amounts.discountAmount > 0
-      ? `Discount: -${formatCurrency(payment.amounts.discountAmount)}`
-      : '',
-    payment.amounts.taxAmount > 0 ? `Tax (GST): ${formatCurrency(payment.amounts.taxAmount)}` : '',
-    `Delivery Cost: ${formatCurrency(payment.amounts.deliveryCost)}`,
-    `Grand Total: ${formatCurrency(payment.amounts.grandTotal)}`,
-    `Amount Received: ${formatCurrency(payment.paidCents / 100)}`,
-    `Outstanding: ${formatCurrency(payment.remainingCents / 100)}`,
-    `Payment Status: ${paymentStatusLabel} (${payment.paidPercent}%)`,
-    '',
-    'Items:',
-    ...(invoice.items || []).map((item) => {
-      const details = getInvoiceItemDetails(item);
-      return `- ${details.productName} | SKU: ${details.sku} | Desc: ${details.description} | Size: ${details.size} | Unit: ${details.unit} | Qty: ${details.quantity} | Rate: ${formatCurrency(details.rate)} | Amount: ${formatCurrency(details.amount)}`;
-    }),
-    '',
-    'Please see attached invoice PDF for your records.',
-    '',
-    `${COMPANY_DETAILS.name}`,
-    `ABN: ${COMPANY_DETAILS.abn}`,
-    `Address: ${COMPANY_DETAILS.address}`,
-    `Bank: ${BANK_DETAILS.bank}`,
-    `Account Name: ${BANK_DETAILS.accountName}`,
-    `BSB: ${BANK_DETAILS.bsb}`,
-    `Account Number: ${BANK_DETAILS.accountNumber}`,
-    '',
-    'Thank you,',
-    COMPANY_DETAILS.name,
-  ]
-    .filter(Boolean)
-    .join('\n');
-
-  const html = `
-    <div style="font-family: Arial, sans-serif; color: #111827; line-height: 1.45;">
-      <h2 style="margin:0 0 16px;">Invoice ${escapeHtml(invoiceNo)}</h2>
-      <p>Dear ${escapeHtml(customerName)},</p>
-      <p>${escapeHtml(intro)}</p>
-      <p>
-        <strong>Invoice Date:</strong> ${escapeHtml(formatDate(invoice.invoiceDate))}<br/>
-        <strong>Due Date:</strong> ${escapeHtml(invoice.dueDate ? formatDate(invoice.dueDate) : 'N/A')}<br/>
-        ${
-          deliveryAddress
-            ? `<strong>Delivery Address:</strong> ${escapeHtml(deliveryAddress)}<br/>`
-            : ''
-        }
-        <strong>Subtotal:</strong> ${escapeHtml(formatCurrency(payment.amounts.subtotal))}<br/>
-        ${
-          payment.amounts.discountAmount > 0
-            ? `<strong>Discount:</strong> -${escapeHtml(formatCurrency(payment.amounts.discountAmount))}<br/>`
-            : ''
-        }
-        ${
-          payment.amounts.taxAmount > 0
-            ? `<strong>Tax (GST):</strong> ${escapeHtml(formatCurrency(payment.amounts.taxAmount))}<br/>`
-            : ''
-        }
-        <strong>Delivery Cost:</strong> ${escapeHtml(formatCurrency(payment.amounts.deliveryCost))}<br/>
-        <strong>Grand Total:</strong> ${escapeHtml(formatCurrency(payment.amounts.grandTotal))}<br/>
-        <strong>Amount Received:</strong> ${escapeHtml(formatCurrency(payment.paidCents / 100))}<br/>
-        <strong>Outstanding:</strong> ${escapeHtml(formatCurrency(payment.remainingCents / 100))}<br/>
-        <strong>Payment Status:</strong> ${escapeHtml(paymentStatusLabel)} (${payment.paidPercent}%)
-      </p>
-
-      <table style="width:100%;border-collapse:collapse;margin:16px 0;">
-        <thead>
-          <tr>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Product</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left;">SKU</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Description</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Size</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Unit</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:right;">Qty</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:right;">Rate</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:right;">Amount</th>
-          </tr>
-        </thead>
-        <tbody>${rowsHtml}${totalsRowsHtml}</tbody>
-      </table>
-
-      ${
-        invoice.notes
-          ? `<p><strong>Notes:</strong> ${escapeHtml(invoice.notes)}</p>`
-          : ''
-      }
-      ${
-        invoice.terms
-          ? `<p><strong>Terms:</strong> ${escapeHtml(invoice.terms)}</p>`
-          : ''
+    return `
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: 'Segoe UI', Arial, Helvetica, sans-serif;
+        font-size: 13px;
+        color: #1a1a2e;
+        padding: 40px 45px;
+        line-height: 1.5;
       }
 
-      <p style="margin-top:20px;">
-        <strong>${escapeHtml(COMPANY_DETAILS.name)}</strong><br/>
-        ABN: ${escapeHtml(COMPANY_DETAILS.abn)}<br/>
-        ${escapeHtml(COMPANY_DETAILS.address)}
-      </p>
+      /* ── Logo + Company Block (top-right) ── */
+      .top-section {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 10px;
+      }
+      .doc-title {
+        font-size: 28px;
+        font-weight: 800;
+        color: #1a1a2e;
+        letter-spacing: 1px;
+      }
+      .logo-company {
+        text-align: right;
+      }
+      .logo-company img {
+        height: 54px;
+        margin-bottom: 4px;
+      }
 
-      <p style="margin-top:12px;">
-        <strong>Bank Details</strong><br/>
-        Bank: ${escapeHtml(BANK_DETAILS.bank)}<br/>
-        Account Name: ${escapeHtml(BANK_DETAILS.accountName)}<br/>
-        BSB: ${escapeHtml(BANK_DETAILS.bsb)}<br/>
-        Account Number: ${escapeHtml(BANK_DETAILS.accountNumber)}
-      </p>
+      /* ── Header grid: customer left, meta+company right ── */
+      .header-grid {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 30px;
+        margin-bottom: 28px;
+      }
+      .customer-block {
+        flex: 1;
+        padding-top: 4px;
+      }
+      .customer-block .cust-name {
+        font-weight: 700;
+        font-size: 14px;
+        margin-bottom: 2px;
+      }
+      .customer-block p {
+        margin: 1px 0;
+        font-size: 12.5px;
+        color: #333;
+      }
+      .meta-company-table {
+        border-collapse: collapse;
+        font-size: 12.5px;
+      }
+      .meta-company-table td {
+        border: 1px solid #bbb;
+        padding: 5px 10px;
+        vertical-align: top;
+      }
+      .meta-company-table .label-col {
+        font-weight: 600;
+        color: #444;
+        white-space: nowrap;
+        background: #fafafa;
+      }
+      .meta-company-table .value-col {
+        min-width: 100px;
+      }
+      .meta-company-table .company-col {
+        font-weight: 600;
+        color: #1a1a2e;
+        min-width: 140px;
+      }
 
-      <p style="margin-top:24px;">Thank you,<br/>${escapeHtml(COMPANY_DETAILS.name)}</p>
+      /* ── Items Table ── */
+      table.items {
+        width: 100%;
+        border-collapse: collapse;
+        margin-bottom: 14px;
+        font-size: 12.5px;
+      }
+      table.items thead {
+        background: #f0f0f4;
+      }
+      table.items th {
+        padding: 9px 10px;
+        text-align: left;
+        font-weight: 700;
+        font-size: 11.5px;
+        color: #333;
+        border: 1px solid #bbb;
+      }
+      table.items th.center, table.items td.center { text-align: center; }
+      table.items th.right, table.items td.right { text-align: right; }
+      table.items td {
+        padding: 8px 10px;
+        border: 1px solid #ccc;
+        color: #1a1a2e;
+      }
+      table.items tbody tr:nth-child(even) {
+        background: #fafafa;
+      }
+
+      /* ── Totals ── */
+      .totals-wrapper {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 22px;
+      }
+      .totals-table {
+        border-collapse: collapse;
+        font-size: 13px;
+        min-width: 300px;
+      }
+      .totals-table td {
+        padding: 6px 12px;
+        border: 1px solid #bbb;
+      }
+      .totals-table .t-label {
+        text-align: right;
+        font-weight: 600;
+        color: #444;
+        background: #fafafa;
+      }
+      .totals-table .t-value {
+        text-align: right;
+        font-weight: 700;
+        min-width: 110px;
+      }
+      .totals-table .grand-row td {
+        background: #f0f0f4;
+        font-size: 14.5px;
+        font-weight: 800;
+        color: #1a1a2e;
+      }
+
+      /* ── Payment Status ── */
+      .payment-section {
+        margin-bottom: 18px;
+        padding: 12px 14px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        background: #fafafa;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 12.5px;
+      }
+      .payment-section .ps-row {
+        display: flex;
+        gap: 20px;
+      }
+      .payment-section .ps-label {
+        color: #666;
+      }
+      .payment-section .ps-value {
+        font-weight: 700;
+      }
+      .badge {
+        display: inline-block;
+        padding: 3px 12px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .badge-paid { background: #dcfce7; color: #166534; }
+      .badge-partial { background: #fef3c7; color: #92400e; }
+      .badge-unpaid { background: #fee2e2; color: #991b1b; }
+
+      /* ── Footer / Bank ── */
+      .footer-block {
+        margin-top: 18px;
+        padding-top: 14px;
+        border-top: 2px solid #1a1a2e;
+      }
+      .footer-block p {
+        margin: 2px 0;
+        font-size: 12.5px;
+        color: #333;
+      }
+      .footer-block .due-date {
+        font-weight: 700;
+        font-size: 13.5px;
+        margin-bottom: 6px;
+        color: #1a1a2e;
+      }
+      .footer-note {
+        margin-top: 22px;
+        text-align: center;
+        font-size: 11.5px;
+        color: #888;
+      }
+      .notes-section {
+        margin-top: 14px;
+        padding: 10px 14px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        font-size: 12.5px;
+        color: #444;
+        background: #fafafa;
+      }
+      .notes-section strong {
+        color: #222;
+      }
+    </style>
+  </head>
+  <body>
+
+    <!-- Logo + Title -->
+    <div class="top-section">
+      <div class="doc-title">TAX INVOICE</div>
+      <div class="logo-company">
+        ${logoSrc ? `<img src="${logoSrc}" alt="Logo" />` : ''}
+      </div>
     </div>
-  `;
 
-  return {
-    subject,
-    text,
-    html,
-    isFinalReceipt,
-    paymentStatus: payment.paymentStatus,
-  };
-}
+    <!-- Customer + Meta + Company -->
+    <div class="header-grid">
+      <div class="customer-block">
+        <p class="cust-name">${escapeHtml(inv.customerName || '')}</p>
+        ${deliveryAddress ? `<p><strong>Delivery Address:</strong> ${escapeHtml(deliveryAddress)}</p>` : ''}
+        ${inv.customerPhone ? `<p>${escapeHtml(inv.customerPhone)}</p>` : ''}
+        ${inv.customerEmail ? `<p>${escapeHtml(inv.customerEmail)}</p>` : ''}
+      </div>
+      <table class="meta-company-table">
+        <tr>
+          <td class="label-col">Invoice Date</td>
+          <td class="value-col">${escapeHtml(formatDate(inv.invoiceDate))}</td>
+          <td class="company-col" rowspan="5" style="vertical-align: top; line-height: 1.6;">
+            ${escapeHtml(company.name)}<br>
+            ${escapeHtml(company.addressLine1)}<br>
+            ${escapeHtml(company.addressLine2)}<br>
+            ${escapeHtml(company.addressLine3)}<br>
+            ${escapeHtml(company.country)}
+          </td>
+        </tr>
+        <tr>
+          <td class="label-col">Invoice Number</td>
+          <td class="value-col">${escapeHtml(inv.invoiceNumber || '')}</td>
+        </tr>
+        <tr>
+          <td class="label-col">Reference</td>
+          <td class="value-col">${inv.quotation && inv.quotation.quotationNumber ? escapeHtml(inv.quotation.quotationNumber) : (inv.reference ? escapeHtml(inv.reference) : '')}</td>
+        </tr>
+        <tr>
+          <td class="label-col">Status</td>
+          <td class="value-col">${escapeHtml(paymentStatusLabel)}</td>
+        </tr>
+        <tr>
+          <td class="label-col">ABN</td>
+          <td class="value-col">${escapeHtml(company.abn)}</td>
+        </tr>
+      </table>
+    </div>
 
-module.exports = {
-  buildInvoiceEmail,
-};
+    <!-- Items Table -->
+    <table class="items">
+      <thead>
+        <tr>
+          <th>Description</th>
+          <th>SKU</th>
+          <th>Size</th>
+          <th>Unit</th>
+          <th class="center">Quantity</th>
+          <th class="right">Unit Price</th>
+          <th class="center">GST</th>
+          <th class="right">Amount AUD</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rowsHtml}
+        ${deliveryRowHtml}
+      </tbody>
+    </table>
 
+    <!-- Totals -->
+    <div class="totals-wrapper">
+      <table class="totals-table">
+        <tr>
+          <td class="t-label">Subtotal</td>
+          <td class="t-value">${formatNumber(subtotal)}</td>
+        </tr>
+        ${discountAmount > 0 ? `<tr><td class="t-label">Discount</td><td class="t-value">-${formatNumber(discountAmount)}</td></tr>` : ''}
+        ${deliveryCost > 0 ? `<tr><td class="t-label">Delivery Cost</td><td class="t-value">${formatNumber(deliveryCost)}</td></tr>` : ''}
+        <tr>
+          <td class="t-label">TOTAL GST ${taxRate}%</td>
+          <td class="t-value">${formatNumber(tax)}</td>
+        </tr>
+        <tr class="grand-row">
+          <td class="t-label">TOTAL AUD</td>
+          <td class="t-value">${formatNumber(grandTotal)}</td>
+        </tr>
+      </table>
+    </div>
 
+    <!-- Payment Info -->
+    <div class="payment-section">
+      <div class="ps-row">
+        <span><span class="ps-label">Amount Received:</span> <span class="ps-value">${formatNumber(paidCents / 100)}</span></span>
+        <span><span class="ps-label">Outstanding:</span> <span class="ps-value">${formatNumber(outstandingCents / 100)}</span></span>
+      </div>
+      <span class="badge ${paymentStatus === 'paid' ? 'badge-paid' : paymentStatus === 'partially_paid' ? 'badge-partial' : 'badge-unpaid'}">${escapeHtml(paymentStatusLabel)}</span>
+    </div>
+
+    <!-- Notes / Terms -->
+    ${inv.notes ? `<div class="notes-section"><strong>Notes:</strong> ${escapeHtml(inv.notes)}</div>` : ''}
+    ${inv.terms ? `<div class="notes-section" style="margin-top:8px;"><strong>Terms:</strong> ${escapeHtml(inv.terms)}</div>` : ''}
+
+    <!-- Bank Details + Due Date -->
+    <div class="footer-block">
+      <p class="due-date">Due Date: ${escapeHtml(dueDateLabel)}</p>
+      <p><strong>Account Name:</strong> ${escapeHtml(company.accountName)}</p>
+      <p><strong>BSB Number:</strong> ${escapeHtml(company.bsb)}</p>
+      <p><strong>Account Number:</strong> ${escapeHtml(company.accountNumber)}</p>
+    </div>
+
+    <p class="footer-note">This is a computer-generated invoice and does not require a signature.</p>
+
+  </body>
+  </html>`;
+  }
+
+  async function generateInvoicePdf(invoice) {
+    const puppeteer = getPuppeteer();
+    const html = buildInvoiceHtml(invoice);
+    let browser;
+    try {
+      browser = await launchPuppeteerBrowser(puppeteer);
+      const page = await browser.newPage();
+      await page.setContent(html, { waitUntil: 'networkidle0' });
+      const pdfBuffer = await page.pdf({
+        format: 'A4',
+        printBackground: true,
+        margin: { top: '20px', right: '20px', bottom: '20px', left: '20px' },
+      });
+      return Buffer.from(pdfBuffer);
+    } finally {
+      if (browser) await browser.close();
+    }
+  }
+
+  module.exports = { generateInvoicePdf, buildInvoiceHtml };
