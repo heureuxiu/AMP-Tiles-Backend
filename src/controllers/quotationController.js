@@ -32,7 +32,18 @@ function formatCurrency(amount) {
   }).format(num);
 }
 
-const DEFAULT_DELIVERY_COST = 295;
+function getDeliveryAddress(source) {
+  return String(source?.deliveryAddress || source?.customerAddress || '').trim();
+}
+
+function formatQuantity(value) {
+  const numeric = Number(value) || 0;
+  const rounded = Math.round(numeric * 1000) / 1000;
+  if (Number.isInteger(rounded)) return String(rounded);
+  return rounded.toFixed(3).replace(/\.?0+$/, '');
+}
+
+const DEFAULT_DELIVERY_COST = 0;
 const COMPANY_NAME = 'AMP TILES PTY LTD';
 
 function roundMoney(value) {
@@ -79,9 +90,49 @@ function getQuotationAmountSnapshot(quotation) {
   };
 }
 
+function getQuotationItemDetails(item) {
+  const product =
+    item && item.product && typeof item.product === 'object' ? item.product : null;
+  const productName = item?.productName || product?.name || 'Product';
+  const skuRaw = item?.sku ?? product?.sku;
+  const descriptionRaw = item?.description ?? product?.description;
+  const sizeRaw = product?.size ?? item?.size;
+  const unitType = String(item?.unitType || '');
+  const normalizedUnit = unitType.toLowerCase();
+  const coverageSqm = Number(item?.coverageSqm);
+  let displayQuantity = formatQuantity(item?.quantity);
+  if (Number.isFinite(coverageSqm) && coverageSqm > 0) {
+    if (
+      normalizedUnit.includes('sqft') ||
+      normalizedUnit.includes('sq ft') ||
+      normalizedUnit.includes('sqfeet')
+    ) {
+      displayQuantity = formatQuantity(coverageSqm * SQFT_PER_SQM);
+    } else if (
+      normalizedUnit.includes('sqm') ||
+      normalizedUnit.includes('sq meter') ||
+      normalizedUnit.includes('sqmetre')
+    ) {
+      displayQuantity = formatQuantity(coverageSqm);
+    }
+  }
+
+  return {
+    productName,
+    sku: skuRaw ? String(skuRaw) : 'N/A',
+    description: descriptionRaw ? String(descriptionRaw) : 'N/A',
+    size: sizeRaw ? String(sizeRaw) : 'N/A',
+    unit: unitType || 'N/A',
+    quantity: displayQuantity,
+    rate: Number(item?.rate) || 0,
+    amount: Number(item?.lineTotal) || 0,
+  };
+}
+
 function buildFallbackQuotationEmail(quotation) {
   const quoteNo = quotation.quotationNumber || String(quotation._id || '');
   const customerName = quotation.customerName || 'Customer';
+  const deliveryAddress = getDeliveryAddress(quotation);
   const quoteDate = formatDate(quotation.quotationDate);
   const validUntil = quotation.validUntil ? formatDate(quotation.validUntil) : 'N/A';
   const amounts = getQuotationAmountSnapshot(quotation);
@@ -89,17 +140,44 @@ function buildFallbackQuotationEmail(quotation) {
 
   const rowsHtml = (quotation.items || [])
     .map((item) => {
-      const productName = escapeHtml(item.productName || 'Product');
-      const qty = Number(item.quantity) || 0;
-      const rate = formatCurrency(item.rate);
-      const amount = formatCurrency(item.lineTotal);
+      const details = getQuotationItemDetails(item);
       return `<tr>
-        <td style="padding:8px;border:1px solid #ddd;">${productName}</td>
-        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${qty}</td>
-        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${rate}</td>
-        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${amount}</td>
+        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.productName)}</td>
+        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.sku)}</td>
+        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.description)}</td>
+        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.size)}</td>
+        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.unit)}</td>
+        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${details.quantity}</td>
+        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${formatCurrency(details.rate)}</td>
+        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${formatCurrency(details.amount)}</td>
       </tr>`;
     })
+    .join('');
+  const totalsRowsHtml = [
+    `<tr>
+      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Subtotal</td>
+      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${escapeHtml(formatCurrency(amounts.subtotal))}</td>
+    </tr>`,
+    amounts.discount > 0
+      ? `<tr>
+          <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Discount</td>
+          <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">-${escapeHtml(formatCurrency(amounts.discount))}</td>
+        </tr>`
+      : '',
+    `<tr>
+      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Tax (GST)</td>
+      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${escapeHtml(formatCurrency(amounts.tax))}</td>
+    </tr>`,
+    `<tr>
+      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Delivery Cost</td>
+      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${escapeHtml(formatCurrency(amounts.deliveryCost))}</td>
+    </tr>`,
+    `<tr>
+      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:700;">Grand Total</td>
+      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:700;">${escapeHtml(grandTotal)}</td>
+    </tr>`,
+  ]
+    .filter(Boolean)
     .join('');
 
   const notesLine = quotation.notes ? `\nNotes: ${quotation.notes}` : '';
@@ -113,6 +191,7 @@ function buildFallbackQuotationEmail(quotation) {
     '',
     `Quotation Date: ${quoteDate}`,
     `Valid Until: ${validUntil}`,
+    deliveryAddress ? `Delivery Address: ${deliveryAddress}` : '',
     `Subtotal: ${formatCurrency(amounts.subtotal)}`,
     amounts.discount > 0 ? `Discount: -${formatCurrency(amounts.discount)}` : '',
     amounts.tax > 0 ? `Tax (GST): ${formatCurrency(amounts.tax)}` : '',
@@ -121,11 +200,11 @@ function buildFallbackQuotationEmail(quotation) {
     '',
     'Items:',
     ...(quotation.items || []).map((item) => {
-      const qty = Number(item.quantity) || 0;
-      const name = item.productName || 'Product';
-      const amount = formatCurrency(item.lineTotal);
-      return `- ${name}: ${qty} x ${formatCurrency(item.rate)} = ${amount}`;
+      const details = getQuotationItemDetails(item);
+      return `- ${details.productName} | SKU: ${details.sku} | Desc: ${details.description} | Size: ${details.size} | Unit: ${details.unit} | Qty: ${details.quantity} | Rate: ${formatCurrency(details.rate)} | Amount: ${formatCurrency(details.amount)}`;
     }),
+    '',
+    'Please see attached quotation PDF for your records.',
     notesLine,
     termsLine,
     '',
@@ -143,6 +222,11 @@ function buildFallbackQuotationEmail(quotation) {
       <p>
         <strong>Quotation Date:</strong> ${escapeHtml(quoteDate)}<br/>
         <strong>Valid Until:</strong> ${escapeHtml(validUntil)}<br/>
+        ${
+          deliveryAddress
+            ? `<strong>Delivery Address:</strong> ${escapeHtml(deliveryAddress)}<br/>`
+            : ''
+        }
         <strong>Subtotal:</strong> ${escapeHtml(formatCurrency(amounts.subtotal))}<br/>
         ${
           amounts.discount > 0
@@ -162,12 +246,16 @@ function buildFallbackQuotationEmail(quotation) {
         <thead>
           <tr>
             <th style="padding:8px;border:1px solid #ddd;text-align:left;">Product</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">SKU</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Description</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Size</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Unit</th>
             <th style="padding:8px;border:1px solid #ddd;text-align:right;">Qty</th>
             <th style="padding:8px;border:1px solid #ddd;text-align:right;">Rate</th>
             <th style="padding:8px;border:1px solid #ddd;text-align:right;">Amount</th>
           </tr>
         </thead>
-        <tbody>${rowsHtml}</tbody>
+        <tbody>${rowsHtml}${totalsRowsHtml}</tbody>
       </table>
 
       ${
@@ -231,6 +319,67 @@ if (quotationEmailModule && typeof quotationEmailModule.buildQuotationEmail === 
   console.warn('Quotation email template utility not found. Using fallback template.');
 }
 
+function normalizeEmail(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase();
+}
+
+function summarizeEmailError(error, fallbackMessage = 'Failed to send quotation email') {
+  return [
+    error?.message || fallbackMessage,
+    error?.code ? `code=${error.code}` : '',
+    error?.command ? `command=${error.command}` : '',
+    error?.responseCode ? `responseCode=${error.responseCode}` : '',
+  ]
+    .filter(Boolean)
+    .join(' | ');
+}
+
+async function sendQuotationEmailWithAttachment(quotationDoc) {
+  const quotation = quotationDoc?.toObject ? quotationDoc.toObject() : quotationDoc;
+  if (!quotation) {
+    const error = new Error('Quotation not found');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const customerEmail = normalizeEmail(quotation.customerEmail);
+  if (!customerEmail) {
+    const error = new Error(
+      'Customer email is missing. Please add customer email before sending quotation.'
+    );
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const pdfBuffer = await generateQuotationPdf(quotation);
+  const emailPayload = buildQuotationEmail(quotation);
+  const quoteRef = String(quotation.quotationNumber || quotation._id || 'quotation').replace(
+    /\s/g,
+    '-'
+  );
+
+  await sendEmail({
+    to: customerEmail,
+    subject: emailPayload.subject,
+    text: emailPayload.text,
+    html: emailPayload.html,
+    attachments: [
+      {
+        filename: `quotation-${quoteRef}.pdf`,
+        content: pdfBuffer,
+        contentType: 'application/pdf',
+      },
+    ],
+  });
+
+  return {
+    customerEmail,
+    emailPayload,
+  };
+}
+
 const HOLDING_QUOTATION_STATUSES = ['sent', 'accepted'];
 const CONVERTIBLE_QUOTATION_STATUSES = ['draft', 'sent', 'accepted'];
 const SQFT_PER_SQM = 10.764;
@@ -272,7 +421,7 @@ exports.getQuotations = async (req, res) => {
     
     const quotations = await Quotation.find(query)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku')
+      .populate('items.product', 'name sku description size')
       .sort(sortBy);
 
     // Calculate statistics
@@ -309,7 +458,7 @@ exports.getQuotation = async (req, res) => {
   try {
     const quotation = await Quotation.findById(req.params.id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku image price unit')
+      .populate('items.product', 'name sku description size image price unit')
       .populate('invoiceId', 'invoiceNumber');
 
     if (!quotation) {
@@ -338,7 +487,7 @@ exports.sendQuotationEmail = async (req, res) => {
   try {
     const quotation = await Quotation.findById(req.params.id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku');
+      .populate('items.product', 'name sku description size');
 
     if (!quotation) {
       return res.status(404).json({
@@ -361,9 +510,7 @@ exports.sendQuotationEmail = async (req, res) => {
       });
     }
 
-    const customerEmail = String(quotation.customerEmail || '')
-      .trim()
-      .toLowerCase();
+    const customerEmail = normalizeEmail(quotation.customerEmail);
     if (!customerEmail) {
       return res.status(400).json({
         success: false,
@@ -372,19 +519,13 @@ exports.sendQuotationEmail = async (req, res) => {
       });
     }
 
-    const emailPayload = buildQuotationEmail(quotation);
-    await sendEmail({
-      to: customerEmail,
-      subject: emailPayload.subject,
-      text: emailPayload.text,
-      html: emailPayload.html,
-    });
+    await sendQuotationEmailWithAttachment(quotation);
 
     if (quotation.status !== 'sent') {
       quotation.status = 'sent';
       await quotation.save();
       await quotation.populate('createdBy', 'name email');
-      await quotation.populate('items.product', 'name sku');
+      await quotation.populate('items.product', 'name sku description size');
     }
 
     res.status(200).json({
@@ -394,17 +535,9 @@ exports.sendQuotationEmail = async (req, res) => {
       quotation,
     });
   } catch (error) {
-    const details = [
-      error?.message || 'Failed to send quotation email',
-      error?.code ? `code=${error.code}` : '',
-      error?.command ? `command=${error.command}` : '',
-      error?.responseCode ? `responseCode=${error.responseCode}` : '',
-    ]
-      .filter(Boolean)
-      .join(' | ');
-
+    const details = summarizeEmailError(error);
     console.error('Send quotation email error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message: details || 'Failed to send quotation email',
     });
@@ -418,7 +551,7 @@ exports.getQuotationPdf = async (req, res) => {
   try {
     const quotation = await Quotation.findById(req.params.id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku')
+      .populate('items.product', 'name sku description size')
       .lean();
 
     if (!quotation) {
@@ -600,7 +733,7 @@ function buildQuotationItem(product, item) {
       ? Number(item.taxPercent)
       : product.taxPercent != null
       ? product.taxPercent
-      : 0;
+      : 10;
 
   const sqmPerBox = getSqmPerBox(product);
   const coverageSqmFromBoxes = sqmPerBox > 0 ? quantity * sqmPerBox : null;
@@ -634,6 +767,7 @@ function buildQuotationItem(product, item) {
     populated: {
       product: product._id,
       productName: product.name,
+      size: String(product.size ?? item.size ?? ''),
       unitType,
       quantity,
       rate,
@@ -836,12 +970,14 @@ exports.createQuotation = async (req, res) => {
       customerPhone,
       customerEmail,
       customerAddress,
+      deliveryAddress,
       quotationDate,
       validUntil,
       items,
       discount,
       discountType,
       taxRate,
+      deliveryCost,
       notes,
       terms,
       status,
@@ -879,12 +1015,12 @@ exports.createQuotation = async (req, res) => {
       totalTax += built.taxAmount;
     }
 
-    const deliveryCost = DEFAULT_DELIVERY_COST;
+    const normalizedDeliveryCost = normalizeDeliveryCost(deliveryCost);
     const grandTotal = calculateQuotationGrandTotal({
       subtotal,
       discount: totalDiscount,
       tax: totalTax,
-      deliveryCost,
+      deliveryCost: normalizedDeliveryCost,
     });
 
     // Create quotation
@@ -893,6 +1029,7 @@ exports.createQuotation = async (req, res) => {
       customerPhone,
       customerEmail,
       customerAddress,
+      deliveryAddress: String(deliveryAddress || customerAddress || '').trim() || undefined,
       quotationDate: quotationDate || Date.now(),
       validUntil,
       items: populatedItems,
@@ -900,8 +1037,11 @@ exports.createQuotation = async (req, res) => {
       discount: totalDiscount,
       discountType: discountType || 'fixed',
       tax: totalTax,
-      taxRate: taxRate || 10,
-      deliveryCost,
+      taxRate:
+        taxRate !== undefined && taxRate !== null && taxRate !== ''
+          ? taxRate
+          : 10,
+      deliveryCost: normalizedDeliveryCost,
       grandTotal,
       notes,
       terms,
@@ -911,35 +1051,23 @@ exports.createQuotation = async (req, res) => {
 
     // Populate references
     await quotation.populate('createdBy', 'name email');
-    await quotation.populate('items.product', 'name sku');
+    await quotation.populate('items.product', 'name sku description size');
 
     let emailSent = false;
     let emailError = null;
     if (shouldSendEmail) {
       try {
-        const emailPayload = buildQuotationEmail(quotation);
-        await sendEmail({
-          to: quotation.customerEmail,
-          subject: emailPayload.subject,
-          text: emailPayload.text,
-          html: emailPayload.html,
-        });
+        await sendQuotationEmailWithAttachment(quotation);
         emailSent = true;
 
         if (quotation.status === 'draft') {
           quotation.status = 'sent';
           await quotation.save();
           await quotation.populate('createdBy', 'name email');
-          await quotation.populate('items.product', 'name sku');
+          await quotation.populate('items.product', 'name sku description size');
         }
       } catch (error) {
-        const parts = [
-          error?.message || 'Failed to send quotation email',
-          error?.code ? `code=${error.code}` : '',
-          error?.command ? `command=${error.command}` : '',
-          error?.responseCode ? `responseCode=${error.responseCode}` : '',
-        ].filter(Boolean);
-        emailError = parts.join(' | ');
+        emailError = summarizeEmailError(error);
       }
     }
 
@@ -988,12 +1116,14 @@ exports.updateQuotation = async (req, res) => {
       customerPhone,
       customerEmail,
       customerAddress,
+      deliveryAddress,
       quotationDate,
       validUntil,
       items,
       discount,
       discountType,
       taxRate,
+      deliveryCost,
       notes,
       terms,
       status,
@@ -1045,7 +1175,8 @@ exports.updateQuotation = async (req, res) => {
         subtotal,
         discount: totalDiscount,
         tax: totalTax,
-        deliveryCost: DEFAULT_DELIVERY_COST,
+        deliveryCost:
+          deliveryCost !== undefined ? deliveryCost : quotation.deliveryCost,
       });
 
       quotation.items = populatedItems;
@@ -1053,8 +1184,9 @@ exports.updateQuotation = async (req, res) => {
       quotation.discount = totalDiscount;
       quotation.discountType = discountType || quotation.discountType;
       quotation.tax = totalTax;
-      quotation.taxRate = taxRate || quotation.taxRate;
-      quotation.deliveryCost = DEFAULT_DELIVERY_COST;
+      if (taxRate !== undefined && taxRate !== null && taxRate !== '') {
+        quotation.taxRate = taxRate;
+      }
       quotation.grandTotal = grandTotal;
     }
 
@@ -1063,10 +1195,14 @@ exports.updateQuotation = async (req, res) => {
     if (customerPhone !== undefined) quotation.customerPhone = customerPhone;
     if (customerEmail !== undefined) quotation.customerEmail = customerEmail;
     if (customerAddress !== undefined) quotation.customerAddress = customerAddress;
+    if (deliveryAddress !== undefined) quotation.deliveryAddress = deliveryAddress;
     if (quotationDate) quotation.quotationDate = quotationDate;
     if (validUntil !== undefined) quotation.validUntil = validUntil;
     if (notes !== undefined) quotation.notes = notes;
     if (terms !== undefined) quotation.terms = terms;
+    if (deliveryCost !== undefined) {
+      quotation.deliveryCost = normalizeDeliveryCost(deliveryCost);
+    }
     if (status) quotation.status = status;
 
     quotation.deliveryCost = normalizeDeliveryCost(quotation.deliveryCost);
@@ -1081,7 +1217,7 @@ exports.updateQuotation = async (req, res) => {
 
     // Populate references
     await quotation.populate('createdBy', 'name email');
-    await quotation.populate('items.product', 'name sku');
+    await quotation.populate('items.product', 'name sku description size');
 
     res.status(200).json({
       success: true,
@@ -1134,7 +1270,7 @@ exports.deleteQuotation = async (req, res) => {
 exports.convertToInvoice = async (req, res) => {
   try {
     const quotation = await Quotation.findById(req.params.id)
-      .populate('items.product', 'name sku');
+      .populate('items.product', 'name sku description size');
 
     if (!quotation) {
       return res.status(404).json({
@@ -1167,11 +1303,15 @@ exports.convertToInvoice = async (req, res) => {
     const invoiceItems = quotation.items.map((item) => ({
       product: item.product._id || item.product,
       productName: item.productName || (item.product && item.product.name) || 'Product',
+      size:
+        (item.product && typeof item.product === 'object' ? item.product.size : '') ||
+        item.size ||
+        '',
       unitType: item.unitType || 'Box',
       quantity: item.quantity,
       rate: item.rate,
       discountPercent: item.discountPercent || 0,
-      taxPercent: item.taxPercent || 0,
+      taxPercent: item.taxPercent ?? 10,
       lineTotal: item.lineTotal,
       coverageSqm: item.coverageSqm,
     }));
@@ -1186,6 +1326,7 @@ exports.convertToInvoice = async (req, res) => {
       customerPhone: quotation.customerPhone,
       customerEmail: quotation.customerEmail,
       customerAddress: quotation.customerAddress,
+      deliveryAddress: getDeliveryAddress(quotation) || undefined,
       invoiceDate: quotation.quotationDate || new Date(),
       dueDate: quotation.validUntil,
       items: invoiceItems,
@@ -1209,7 +1350,7 @@ exports.convertToInvoice = async (req, res) => {
 
     const populatedInvoice = await Invoice.findById(invoice._id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku')
+      .populate('items.product', 'name sku description size')
       .populate('quotation', 'quotationNumber');
 
     res.status(200).json({
@@ -1279,3 +1420,5 @@ exports.getQuotationStats = async (req, res) => {
     });
   }
 };
+
+
