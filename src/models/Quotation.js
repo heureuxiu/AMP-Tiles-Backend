@@ -10,6 +10,11 @@ const quotationItemSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  size: {
+    type: String,
+    trim: true,
+    default: '',
+  },
   unitType: {
     type: String,
     enum: ['Box', 'Sq Ft', 'Sq Meter', 'Piece'],
@@ -33,7 +38,7 @@ const quotationItemSchema = new mongoose.Schema({
   },
   taxPercent: {
     type: Number,
-    default: 0,
+    default: 10,
     min: 0,
     max: 100,
   },
@@ -68,6 +73,10 @@ const quotationSchema = new mongoose.Schema(
       lowercase: true,
     },
     customerAddress: {
+      type: String,
+      trim: true,
+    },
+    deliveryAddress: {
       type: String,
       trim: true,
     },
@@ -107,7 +116,7 @@ const quotationSchema = new mongoose.Schema(
     },
     deliveryCost: {
       type: Number,
-      default: 295,
+      default: 0,
       min: 0,
     },
     grandTotal: {
