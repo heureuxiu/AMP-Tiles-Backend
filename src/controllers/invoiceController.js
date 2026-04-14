@@ -32,8 +32,18 @@ function toCents(value) {
   return Math.round((Number(value) || 0) * 100);
 }
 
-const DEFAULT_DELIVERY_COST = 295;
+function getDeliveryAddress(source) {
+  return String(source?.deliveryAddress || source?.customerAddress || '').trim();
+}
+
+const DEFAULT_DELIVERY_COST = 0;
 const COMPANY_NAME = 'AMP TILES PTY LTD';
+
+function normalizeDeliveryCost(value, fallback = DEFAULT_DELIVERY_COST) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return roundMoney(fallback);
+  return roundMoney(numeric);
+}
 
 function getInvoiceAmountSnapshot(invoice) {
   const subtotal = Number(invoice?.subtotal) || 0;
@@ -60,9 +70,30 @@ function getInvoiceAmountSnapshot(invoice) {
   };
 }
 
+function getInvoiceItemDetails(item) {
+  const product =
+    item && item.product && typeof item.product === 'object' ? item.product : null;
+  const productName = item?.productName || product?.name || 'Product';
+  const skuRaw = item?.sku ?? product?.sku;
+  const descriptionRaw = item?.description ?? product?.description;
+  const sizeRaw = product?.size ?? item?.size;
+
+  return {
+    productName,
+    sku: skuRaw ? String(skuRaw) : 'N/A',
+    description: descriptionRaw ? String(descriptionRaw) : 'N/A',
+    size: sizeRaw ? String(sizeRaw) : 'N/A',
+    unit: item?.unitType || 'N/A',
+    quantity: Number(item?.quantity) || 0,
+    rate: Number(item?.rate) || 0,
+    amount: Number(item?.lineTotal) || 0,
+  };
+}
+
 function buildFallbackInvoiceEmail(invoice) {
   const invoiceNo = invoice.invoiceNumber || String(invoice._id || '');
   const customerName = invoice.customerName || 'Customer';
+  const deliveryAddress = getDeliveryAddress(invoice);
   const amounts = getInvoiceAmountSnapshot(invoice);
   const grandTotalCents = Math.max(0, toCents(amounts.grandTotal));
   const paidCents = Math.max(0, Math.min(grandTotalCents, toCents(invoice.amountPaid)));
@@ -72,6 +103,48 @@ function buildFallbackInvoiceEmail(invoice) {
   const subject = isFinalReceipt
     ? `Payment received in full for Invoice ${invoiceNo}`
     : `Updated Invoice ${invoiceNo} from ${COMPANY_NAME}`;
+
+  const rowsHtml = (invoice.items || [])
+    .map((item) => {
+      const details = getInvoiceItemDetails(item);
+      return `<tr>
+        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.productName)}</td>
+        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.sku)}</td>
+        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.description)}</td>
+        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.size)}</td>
+        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.unit)}</td>
+        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${details.quantity}</td>
+        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${fallbackFormatCurrency(details.rate)}</td>
+        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${fallbackFormatCurrency(details.amount)}</td>
+      </tr>`;
+    })
+    .join('');
+  const totalsRowsHtml = [
+    `<tr>
+      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Subtotal</td>
+      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${fallbackFormatCurrency(amounts.subtotal)}</td>
+    </tr>`,
+    amounts.discountAmount > 0
+      ? `<tr>
+          <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Discount</td>
+          <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">-${fallbackFormatCurrency(amounts.discountAmount)}</td>
+        </tr>`
+      : '',
+    `<tr>
+      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Tax (GST)</td>
+      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${fallbackFormatCurrency(amounts.taxAmount)}</td>
+    </tr>`,
+    `<tr>
+      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Delivery Cost</td>
+      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${fallbackFormatCurrency(amounts.deliveryCost)}</td>
+    </tr>`,
+    `<tr>
+      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:700;">Grand Total</td>
+      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:700;">${fallbackFormatCurrency(amounts.grandTotal)}</td>
+    </tr>`,
+  ]
+    .filter(Boolean)
+    .join('');
 
   const text = [
     `Invoice ${invoiceNo}`,
@@ -83,6 +156,7 @@ function buildFallbackInvoiceEmail(invoice) {
     '',
     `Invoice Date: ${fallbackFormatDate(invoice.invoiceDate)}`,
     `Due Date: ${invoice.dueDate ? fallbackFormatDate(invoice.dueDate) : 'N/A'}`,
+    deliveryAddress ? `Delivery Address: ${deliveryAddress}` : '',
     `Subtotal: ${fallbackFormatCurrency(amounts.subtotal)}`,
     amounts.discountAmount > 0 ? `Discount: -${fallbackFormatCurrency(amounts.discountAmount)}` : '',
     amounts.taxAmount > 0 ? `Tax (GST): ${fallbackFormatCurrency(amounts.taxAmount)}` : '',
@@ -90,6 +164,12 @@ function buildFallbackInvoiceEmail(invoice) {
     `Grand Total: ${fallbackFormatCurrency(amounts.grandTotal)}`,
     `Amount Received: ${fallbackFormatCurrency(paidCents / 100)}`,
     `Outstanding: ${fallbackFormatCurrency(remainingCents / 100)}`,
+    '',
+    'Items:',
+    ...(invoice.items || []).map((item) => {
+      const details = getInvoiceItemDetails(item);
+      return `- ${details.productName} | SKU: ${details.sku} | Desc: ${details.description} | Size: ${details.size} | Unit: ${details.unit} | Qty: ${details.quantity} | Rate: ${fallbackFormatCurrency(details.rate)} | Amount: ${fallbackFormatCurrency(details.amount)}`;
+    }),
     '',
     'Please see attached invoice PDF for your records.',
     '',
@@ -113,6 +193,11 @@ function buildFallbackInvoiceEmail(invoice) {
         <strong>Due Date:</strong> ${
           invoice.dueDate ? fallbackFormatDate(invoice.dueDate) : 'N/A'
         }<br/>
+        ${
+          deliveryAddress
+            ? `<strong>Delivery Address:</strong> ${escapeHtml(deliveryAddress)}<br/>`
+            : ''
+        }
         <strong>Subtotal:</strong> ${fallbackFormatCurrency(amounts.subtotal)}<br/>
         ${
           amounts.discountAmount > 0
@@ -129,6 +214,23 @@ function buildFallbackInvoiceEmail(invoice) {
         <strong>Amount Received:</strong> ${fallbackFormatCurrency(paidCents / 100)}<br/>
         <strong>Outstanding:</strong> ${fallbackFormatCurrency(remainingCents / 100)}
       </p>
+
+      <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+        <thead>
+          <tr>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Product</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">SKU</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Description</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Size</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Unit</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:right;">Qty</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:right;">Rate</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:right;">Amount</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHtml}${totalsRowsHtml}</tbody>
+      </table>
+
       <p>Thank you,<br/>${COMPANY_NAME}</p>
     </div>
   `;
@@ -351,7 +453,7 @@ function buildInvoiceItem(product, item) {
     pickFirstFiniteNumber([item.rate, product.retailPrice, product.price], 0)
   );
   const discountPercent = pickFirstFiniteNumber([item.discountPercent], 0);
-  const taxPercent = pickFirstFiniteNumber([item.taxPercent, product.taxPercent], 0);
+  const taxPercent = pickFirstFiniteNumber([item.taxPercent, product.taxPercent], 10);
   const unitType = item.unitType || 'Box';
 
   const billableQuantity = getBillableQuantity(product, item);
@@ -367,6 +469,7 @@ function buildInvoiceItem(product, item) {
   return {
     product: product._id,
     productName: product.name,
+    size: String(product.size ?? item.size ?? ''),
     unitType,
     quantity,
     rate,
@@ -678,7 +781,7 @@ exports.getInvoices = async (req, res) => {
     sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
     const invoices = await Invoice.find(query)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku retailPrice price coveragePerBox coveragePerBoxUnit')
+      .populate('items.product', 'name sku description size retailPrice price coveragePerBox coveragePerBoxUnit')
       .sort(sort);
 
     const statuses = ['draft', 'confirmed', 'delivered', 'cancelled', 'sent', 'paid', 'overdue'];
@@ -711,7 +814,7 @@ exports.getInvoice = async (req, res) => {
   try {
     const invoice = await Invoice.findById(req.params.id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku retailPrice price coveragePerBox coveragePerBoxUnit')
+      .populate('items.product', 'name sku description size retailPrice price coveragePerBox coveragePerBoxUnit')
       .populate('quotation', 'quotationNumber');
 
     if (!invoice) {
@@ -739,12 +842,14 @@ exports.createInvoice = async (req, res) => {
       customerPhone,
       customerEmail,
       customerAddress,
+      deliveryAddress,
       invoiceDate,
       dueDate,
       items,
       discount,
       discountType,
       taxRate,
+      deliveryCost,
       notes,
       terms,
       status: reqStatus,
@@ -793,12 +898,14 @@ exports.createInvoice = async (req, res) => {
       customerPhone,
       customerEmail,
       customerAddress,
+      deliveryAddress: String(deliveryAddress || customerAddress || '').trim() || undefined,
       invoiceDate: invoiceDate || Date.now(),
       dueDate,
       items: populatedItems,
       discount: pickFirstFiniteNumber([discount], 0),
       discountType: discountType || 'percentage',
       taxRate: pickFirstFiniteNumber([taxRate], 10),
+      deliveryCost: normalizeDeliveryCost(deliveryCost),
       notes,
       terms,
       status,
@@ -817,7 +924,7 @@ exports.createInvoice = async (req, res) => {
 
     const populatedInvoice = await Invoice.findById(invoice._id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku')
+      .populate('items.product', 'name sku description size')
       .populate('quotation', 'quotationNumber');
 
     let emailSent = false;
@@ -873,12 +980,14 @@ exports.updateInvoice = async (req, res) => {
       customerPhone,
       customerEmail,
       customerAddress,
+      deliveryAddress,
       invoiceDate,
       dueDate,
       items,
       discount,
       discountType,
       taxRate,
+      deliveryCost,
       notes,
       terms,
       status: newStatus,
@@ -910,6 +1019,7 @@ exports.updateInvoice = async (req, res) => {
     if (customerPhone !== undefined) invoice.customerPhone = customerPhone;
     if (customerEmail !== undefined) invoice.customerEmail = customerEmail;
     if (customerAddress !== undefined) invoice.customerAddress = customerAddress;
+    if (deliveryAddress !== undefined) invoice.deliveryAddress = deliveryAddress;
     if (invoiceDate) invoice.invoiceDate = invoiceDate;
     if (dueDate !== undefined) invoice.dueDate = dueDate;
     if (discount !== undefined) {
@@ -917,7 +1027,10 @@ exports.updateInvoice = async (req, res) => {
     }
     if (discountType) invoice.discountType = discountType;
     if (taxRate !== undefined) {
-      invoice.taxRate = pickFirstFiniteNumber([taxRate], invoice.taxRate || 0);
+      invoice.taxRate = pickFirstFiniteNumber([taxRate], invoice.taxRate ?? 10);
+    }
+    if (deliveryCost !== undefined) {
+      invoice.deliveryCost = normalizeDeliveryCost(deliveryCost, invoice.deliveryCost);
     }
     if (notes !== undefined) invoice.notes = notes;
     if (terms !== undefined) invoice.terms = terms;
@@ -958,7 +1071,7 @@ exports.updateInvoice = async (req, res) => {
 
     const updatedInvoice = await Invoice.findById(invoice._id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku')
+      .populate('items.product', 'name sku description size')
       .populate('quotation', 'quotationNumber');
 
     let emailSent = false;
@@ -1025,7 +1138,7 @@ exports.markInvoiceAsPaid = async (req, res) => {
 
     const updatedInvoice = await Invoice.findById(invoice._id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku')
+      .populate('items.product', 'name sku description size')
       .populate('quotation', 'quotationNumber');
 
     let emailSent = false;
@@ -1070,7 +1183,7 @@ exports.sendInvoiceEmail = async (req, res) => {
   try {
     const invoice = await Invoice.findById(req.params.id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku')
+      .populate('items.product', 'name sku description size')
       .populate('quotation', 'quotationNumber');
 
     if (!invoice) {
@@ -1114,6 +1227,7 @@ exports.getInvoicePdf = async (req, res) => {
   try {
     const invoice = await Invoice.findById(req.params.id)
       .populate('quotation', 'quotationNumber')
+      .populate('items.product', 'name size')
       .lean();
     if (!invoice) {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
@@ -1191,3 +1305,5 @@ exports.getInvoiceStats = async (req, res) => {
     });
   }
 };
+
+
