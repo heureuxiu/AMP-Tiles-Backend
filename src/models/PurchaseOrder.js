@@ -9,6 +9,7 @@ const purchaseOrderItemSchema = new mongoose.Schema(
     },
     productName: { type: String, required: true },
     sku: { type: String, default: '' },
+    size: { type: String, trim: true, default: '' },
     unitType: {
       type: String,
       required: true,
@@ -26,7 +27,7 @@ const purchaseOrderItemSchema = new mongoose.Schema(
       min: [0, 'Rate must be a positive number'],
     },
     discountPercent: { type: Number, default: 0, min: 0, max: 100 },
-    taxPercent: { type: Number, default: 0, min: 0, max: 100 },
+    taxPercent: { type: Number, default: 10, min: 0, max: 100 },
     lineTotal: {
       type: Number,
       required: true,
@@ -124,7 +125,7 @@ purchaseOrderSchema.pre('save', function () {
       const afterDiscount =
         item.quantityOrdered * item.rate * (1 - (item.discountPercent || 0) / 100);
       item.lineTotal = Math.round(
-        afterDiscount * (1 + (item.taxPercent || 0) / 100) * 100
+        afterDiscount * (1 + ((item.taxPercent ?? 10) / 100)) * 100
       ) / 100;
     });
     this.subtotal = this.items.reduce((sum, i) => sum + i.lineTotal, 0);
