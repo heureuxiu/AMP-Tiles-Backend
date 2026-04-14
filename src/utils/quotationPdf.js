@@ -63,6 +63,11 @@ function getItemSize(item) {
   return rawSize ? String(rawSize) : '';
 }
 
+function getItemSku(item) {
+  const rawSku = item?.sku ?? item?.product?.sku;
+  return rawSku ? String(rawSku) : '';
+}
+
 function getDeliveryAddress(source) {
   return String(source?.deliveryAddress || source?.customerAddress || '').trim();
 }
@@ -100,6 +105,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
       (item) => `
     <tr>
       <td>${escapeHtml(item.productName || item.product?.name || '')}</td>
+      <td>${escapeHtml(getItemSku(item))}</td>
       <td>${escapeHtml(getItemSize(item))}</td>
       <td>${escapeHtml(item.unitType || '')}</td>
       <td class="center">${escapeHtml(getDisplayQuantity(item))}</td>
@@ -136,6 +142,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
   const deliveryRowHtml = deliveryCost > 0 ? `
     <tr>
       <td>Delivery Cost</td>
+      <td></td>
       <td></td>
       <td></td>
       <td class="center">1</td>
@@ -374,6 +381,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
     <thead>
       <tr>
         <th>Description</th>
+        <th>SKU</th>
         <th>Size</th>
         <th>Unit</th>
         <th class="center">Quantity</th>
