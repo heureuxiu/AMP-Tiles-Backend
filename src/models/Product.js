@@ -107,7 +107,7 @@ const productSchema = new mongoose.Schema(
       type: Number,
       min: 0,
       max: 100,
-      default: null,
+      default: 10,
     },
     // --- Cost (admin only) ---
     costPrice: {
