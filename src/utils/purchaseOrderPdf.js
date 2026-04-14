@@ -27,6 +27,11 @@ function formatDate(date) {
   return `${day} ${months[d.getMonth()]} ${d.getFullYear()}`;
 }
 
+function getItemSize(item) {
+  const rawSize = item?.product?.size ?? item?.size;
+  return rawSize ? String(rawSize) : '';
+}
+
 function getLogoBase64() {
   try {
     const logoPath = path.resolve(__dirname, '../../../client/public/assets/AMP-TILES-LOGO.png');
@@ -62,6 +67,7 @@ function buildPurchaseOrderHtml(purchaseOrder, companyInfo = {}) {
     <tr>
       <td>${escapeHtml(item.sku || '')}</td>
       <td>${escapeHtml(item.productName || item.product?.name || '')}</td>
+      <td>${escapeHtml(getItemSize(item))}</td>
       <td class="center">${escapeHtml(String(item.quantityOrdered ?? 0))}</td>
       <td class="right">${formatNumber(item.rate)}</td>
       <td class="center">${item.taxPercent ? item.taxPercent + '%' : '10%'}</td>
@@ -317,6 +323,7 @@ function buildPurchaseOrderHtml(purchaseOrder, companyInfo = {}) {
       <tr>
         <th>Item/SKU</th>
         <th>Description</th>
+        <th>Size</th>
         <th class="center">Quantity</th>
         <th class="right">Unit Price</th>
         <th class="center">GST</th>
