@@ -74,18 +74,36 @@ const supplierSchema = new mongoose.Schema(
   }
 );
 
-// Generate unique supplier number before saving
+// Generate a unique supplier number before saving.
+// This reduces collisions with existing/imported records by checking candidates.
 supplierSchema.pre('save', async function () {
-  if (this.isNew && !this.supplierNumber) {
-    const year = new Date().getFullYear();
-    const count = await this.constructor.countDocuments({
-      createdAt: {
-        $gte: new Date(`${year}-01-01`),
-        $lt: new Date(`${year + 1}-01-01`),
-      },
-    });
-    this.supplierNumber = `SUP-${year}-${String(count + 1).padStart(3, '0')}`;
+  if (!this.isNew || this.supplierNumber) return;
+
+  const year = new Date().getFullYear();
+  const baseCount = await this.constructor.countDocuments({
+    createdAt: {
+      $gte: new Date(`${year}-01-01`),
+      $lt: new Date(`${year + 1}-01-01`),
+    },
+  });
+
+  let sequence = baseCount + 1;
+  const maxAttempts = 10000;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const candidate = `SUP-${year}-${String(sequence).padStart(3, '0')}`;
+    // eslint-disable-next-line no-await-in-loop
+    const exists = await this.constructor.exists({ supplierNumber: candidate });
+
+    if (!exists) {
+      this.supplierNumber = candidate;
+      return;
+    }
+
+    sequence += 1;
   }
+
+  throw new Error(`Unable to generate unique supplier number for year ${year}`);
 });
 
 // Indexes for better query performance
