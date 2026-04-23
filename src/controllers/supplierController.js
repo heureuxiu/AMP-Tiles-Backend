@@ -136,8 +136,7 @@ exports.createSupplier = async (req, res) => {
       }
     }
 
-    // Create supplier
-    const supplier = await Supplier.create({
+    const supplierPayload = {
       name,
       contactPerson,
       phone,
@@ -148,7 +147,28 @@ exports.createSupplier = async (req, res) => {
       notes,
       paymentTerms,
       createdBy: req.user.id,
-    });
+    };
+
+    // Retry on supplierNumber duplicate-key race conditions during concurrent creates.
+    const maxCreateAttempts = 5;
+    let supplier;
+
+    for (let attempt = 0; attempt < maxCreateAttempts; attempt += 1) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        supplier = await Supplier.create(supplierPayload);
+        break;
+      } catch (createError) {
+        const isSupplierNumberDuplicate =
+          createError?.code === 11000 &&
+          (createError?.keyPattern?.supplierNumber || createError?.keyValue?.supplierNumber);
+
+        const isFinalAttempt = attempt === maxCreateAttempts - 1;
+        if (!isSupplierNumberDuplicate || isFinalAttempt) {
+          throw createError;
+        }
+      }
+    }
 
     res.status(201).json({
       success: true,
