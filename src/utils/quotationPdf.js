@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const { getPuppeteer, launchPuppeteerBrowser } = require('./puppeteerLauncher');
 
 function escapeHtml(text) {
@@ -35,6 +37,22 @@ function formatQuantity(value) {
 }
 
 const SQFT_PER_SQM = 10.764;
+const DELIVERY_GST_RATE = 10;
+
+function roundMoney(value) {
+  return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+function normalizeDeliveryCost(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return 0;
+  return roundMoney(numeric);
+}
+
+function calculateDeliveryGst(deliveryCost) {
+  const normalizedDeliveryCost = normalizeDeliveryCost(deliveryCost);
+  return roundMoney((normalizedDeliveryCost * DELIVERY_GST_RATE) / 100);
+}
 
 function getDisplayQuantity(item) {
   const unitType = String(item?.unitType || '').toLowerCase();
@@ -126,17 +144,19 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
     Math.round((Number(quote.grandTotal) - baseTotal) * 100) / 100
   );
   const deliveryCost = Number.isFinite(parsedDeliveryCost)
-    ? Math.max(0, parsedDeliveryCost)
+    ? normalizeDeliveryCost(parsedDeliveryCost)
     : Number.isFinite(fallbackDeliveryCost)
-      ? fallbackDeliveryCost
+      ? normalizeDeliveryCost(fallbackDeliveryCost)
       : 0;
+  const deliveryGst = calculateDeliveryGst(deliveryCost);
   const grandTotal = Number.isFinite(Number(quote.grandTotal))
     ? Number(quote.grandTotal)
-    : Math.round((baseTotal + deliveryCost) * 100) / 100;
+    : Math.round((baseTotal + deliveryCost + deliveryGst) * 100) / 100;
 
   const taxRate = quote.taxRate || 10;
   const validUntil = quote.validUntil ? formatDate(quote.validUntil) : 'N/A';
   const statusLabel = String(quote.status || 'draft').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  const referenceLabel = String(quote.reference || '').trim();
 
   // Delivery row for the table
   const deliveryRowHtml = deliveryCost > 0 ? `
@@ -147,8 +167,8 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
       <td></td>
       <td class="center">1</td>
       <td class="right">${formatNumber(deliveryCost)}</td>
-      <td class="center">${taxRate}%</td>
-      <td class="right">${formatNumber(deliveryCost)}</td>
+      <td class="center">${DELIVERY_GST_RATE}%</td>
+      <td class="right">${formatNumber(deliveryCost + deliveryGst)}</td>
     </tr>` : '';
 
   return `
@@ -184,6 +204,14 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
     .logo-company img {
       height: 54px;
       margin-bottom: 4px;
+    }
+    .top-reference {
+      font-size: 11.5px;
+      color: #333;
+      margin-top: 2px;
+    }
+    .top-reference strong {
+      color: #1a1a2e;
     }
 
     .header-grid {
@@ -334,6 +362,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
     <div class="doc-title">QUOTATION</div>
     <div class="logo-company">
       ${logoSrc ? `<img src="${logoSrc}" alt="Logo" />` : ''}
+      ${referenceLabel ? `<div class="top-reference"><strong>Reference:</strong> ${escapeHtml(referenceLabel)}</div>` : ''}
     </div>
   </div>
 
@@ -349,7 +378,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
       <tr>
         <td class="label-col">Quote Date</td>
         <td class="value-col">${escapeHtml(formatDate(quote.quotationDate))}</td>
-        <td class="company-col" rowspan="5" style="vertical-align: top; line-height: 1.6;">
+        <td class="company-col" rowspan="6" style="vertical-align: top; line-height: 1.6;">
           ${escapeHtml(company.name)}<br>
           ${escapeHtml(company.addressLine1)}<br>
           ${escapeHtml(company.addressLine2)}<br>
@@ -368,6 +397,10 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
       <tr>
         <td class="label-col">Status</td>
         <td class="value-col">${escapeHtml(statusLabel)}</td>
+      </tr>
+      <tr>
+        <td class="label-col">Reference</td>
+        <td class="value-col">${escapeHtml(referenceLabel)}</td>
       </tr>
       <tr>
         <td class="label-col">ABN</td>
@@ -405,8 +438,9 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
       </tr>
       ${discount > 0 ? `<tr><td class="t-label">Discount</td><td class="t-value">-${formatNumber(discount)}</td></tr>` : ''}
       ${deliveryCost > 0 ? `<tr><td class="t-label">Delivery Cost</td><td class="t-value">${formatNumber(deliveryCost)}</td></tr>` : ''}
+      ${deliveryGst > 0 ? `<tr><td class="t-label">Delivery GST (${DELIVERY_GST_RATE}%)</td><td class="t-value">${formatNumber(deliveryGst)}</td></tr>` : ''}
       <tr>
-        <td class="t-label">TOTAL GST ${taxRate}%</td>
+        <td class="t-label">Items GST</td>
         <td class="t-value">${formatNumber(tax)}</td>
       </tr>
       <tr class="grand-row">
