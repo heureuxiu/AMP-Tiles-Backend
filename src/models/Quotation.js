@@ -23,7 +23,7 @@ const quotationItemSchema = new mongoose.Schema({
   quantity: {
     type: Number,
     required: [true, 'Please provide quantity'],
-    min: [1, 'Quantity must be at least 1'],
+    min: [0.001, 'Quantity must be greater than 0'],
   },
   rate: {
     type: Number,
@@ -57,6 +57,10 @@ const quotationSchema = new mongoose.Schema(
   {
     quotationNumber: {
       type: String,
+    },
+    reference: {
+      type: String,
+      trim: true,
     },
     customerName: {
       type: String,
