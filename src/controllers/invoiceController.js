@@ -9,6 +9,15 @@ let sendEmail = async () => {
   throw new Error('Email service is not available');
 };
 
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function fallbackFormatDate(value) {
   if (!value) return 'N/A';
   const date = new Date(value);
@@ -38,6 +47,36 @@ function getDeliveryAddress(source) {
 
 const DEFAULT_DELIVERY_COST = 0;
 const COMPANY_NAME = 'AMP TILES PTY LTD';
+const SQFT_PER_SQM = 10.764;
+
+function formatQuantity(value) {
+  const numeric = Number(value) || 0;
+  const rounded = Math.round(numeric * 1000) / 1000;
+  if (Number.isInteger(rounded)) return String(rounded);
+  return rounded.toFixed(3).replace(/\.?0+$/, '');
+}
+
+function getDisplayQuantity(item) {
+  const unitType = String(item?.unitType || '').toLowerCase();
+  const coverageSqm = Number(item?.coverageSqm);
+  if (Number.isFinite(coverageSqm) && coverageSqm > 0) {
+    if (
+      unitType.includes('sqft') ||
+      unitType.includes('sq ft') ||
+      unitType.includes('sqfeet')
+    ) {
+      return formatQuantity(coverageSqm * SQFT_PER_SQM);
+    }
+    if (
+      unitType.includes('sqm') ||
+      unitType.includes('sq meter') ||
+      unitType.includes('sqmetre')
+    ) {
+      return formatQuantity(coverageSqm);
+    }
+  }
+  return formatQuantity(item?.quantity ?? 0);
+}
 
 function normalizeDeliveryCost(value, fallback = DEFAULT_DELIVERY_COST) {
   const numeric = Number(value);
@@ -84,7 +123,7 @@ function getInvoiceItemDetails(item) {
     description: descriptionRaw ? String(descriptionRaw) : 'N/A',
     size: sizeRaw ? String(sizeRaw) : 'N/A',
     unit: item?.unitType || 'N/A',
-    quantity: Number(item?.quantity) || 0,
+    quantity: getDisplayQuantity(item),
     rate: Number(item?.rate) || 0,
     amount: Number(item?.lineTotal) || 0,
   };
@@ -280,7 +319,6 @@ if (invoiceEmailModule && typeof invoiceEmailModule.buildInvoiceEmail === 'funct
 }
 
 const HOLDING_QUOTATION_STATUSES = ['sent', 'accepted'];
-const SQFT_PER_SQM = 10.764;
 
 function roundQty(value) {
   return Math.round((Number(value) || 0) * 1000) / 1000;
@@ -784,19 +822,44 @@ exports.getInvoices = async (req, res) => {
       .populate('items.product', 'name sku description size retailPrice price coveragePerBox coveragePerBoxUnit')
       .sort(sort);
 
-    const statuses = ['draft', 'confirmed', 'delivered', 'cancelled', 'sent', 'paid', 'overdue'];
-    const stats = { total: invoices.length };
-    statuses.forEach(s => {
-      stats[s] = invoices.filter(inv => inv.status === s).length;
+    // Recompute grandTotal / remainingBalance from line items so stale DB values don't reach the client
+    const correctedInvoices = invoices.map(inv => {
+      const obj = inv.toObject();
+      const items = obj.items || [];
+      const txRate = items.length > 0
+        ? (Number(items[0].taxPercent) > 0 ? Number(items[0].taxPercent) : 10)
+        : (Number(obj.taxRate) > 0 ? Number(obj.taxRate) : 10);
+      const itemsPreTax = Math.round(items.reduce((sum, item) => {
+        const p = Number(item.taxPercent ?? txRate);
+        return sum + (Number(item.lineTotal || 0) / (1 + p / 100));
+      }, 0) * 100) / 100;
+      const itemsGst = Math.round(items.reduce((sum, item) => {
+        const p = Number(item.taxPercent ?? txRate);
+        const lt = Number(item.lineTotal || 0);
+        return sum + (lt - lt / (1 + p / 100));
+      }, 0) * 100) / 100;
+      const discountAmount = Number(obj.discountAmount) || 0;
+      const deliveryCost = Math.max(0, Number(obj.deliveryCost) || 0);
+      const deliveryGst = Math.round(deliveryCost * txRate / 100 * 100) / 100;
+      const grandTotal = Math.round((itemsPreTax - discountAmount + itemsGst + deliveryCost + deliveryGst) * 100) / 100;
+      const amountPaid = Math.max(0, Number(obj.amountPaid) || 0);
+      const remainingBalance = Math.max(0, Math.round((grandTotal - amountPaid) * 100) / 100);
+      return { ...obj, grandTotal, remainingBalance };
     });
-    stats.totalRevenue = invoices
+
+    const statuses = ['draft', 'confirmed', 'delivered', 'cancelled', 'sent', 'paid', 'overdue'];
+    const stats = { total: correctedInvoices.length };
+    statuses.forEach(s => {
+      stats[s] = correctedInvoices.filter(inv => inv.status === s).length;
+    });
+    stats.totalRevenue = correctedInvoices
       .filter(inv => inv.paymentStatus === 'paid' || inv.status === 'paid')
       .reduce((sum, inv) => sum + (inv.grandTotal || 0), 0);
-    stats.pendingAmount = invoices
+    stats.pendingAmount = correctedInvoices
       .filter(inv => inv.paymentStatus !== 'paid' && inv.status !== 'cancelled')
       .reduce((sum, inv) => sum + (inv.remainingBalance || inv.grandTotal || 0), 0);
 
-    res.status(200).json({ success: true, count: invoices.length, stats, invoices });
+    res.status(200).json({ success: true, count: correctedInvoices.length, stats, invoices: correctedInvoices });
   } catch (error) {
     console.error('Get invoices error:', error);
     res.status(500).json({
@@ -838,6 +901,7 @@ exports.createInvoice = async (req, res) => {
   try {
     const {
       quotation,
+      reference,
       customerName,
       customerPhone,
       customerEmail,
@@ -894,6 +958,7 @@ exports.createInvoice = async (req, res) => {
 
     const invoice = await Invoice.create({
       quotation: quotation || undefined,
+      reference: String(reference || '').trim() || undefined,
       customerName,
       customerPhone,
       customerEmail,
@@ -976,6 +1041,7 @@ exports.updateInvoice = async (req, res) => {
     }
 
     const {
+      reference,
       customerName,
       customerPhone,
       customerEmail,
@@ -1020,6 +1086,9 @@ exports.updateInvoice = async (req, res) => {
     if (customerEmail !== undefined) invoice.customerEmail = customerEmail;
     if (customerAddress !== undefined) invoice.customerAddress = customerAddress;
     if (deliveryAddress !== undefined) invoice.deliveryAddress = deliveryAddress;
+    if (reference !== undefined) {
+      invoice.reference = String(reference || '').trim() || undefined;
+    }
     if (invoiceDate) invoice.invoiceDate = invoiceDate;
     if (dueDate !== undefined) invoice.dueDate = dueDate;
     if (discount !== undefined) {
@@ -1227,7 +1296,7 @@ exports.getInvoicePdf = async (req, res) => {
   try {
     const invoice = await Invoice.findById(req.params.id)
       .populate('quotation', 'quotationNumber')
-      .populate('items.product', 'name size')
+      .populate('items.product', 'name sku size')
       .lean();
     if (!invoice) {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
@@ -1305,5 +1374,4 @@ exports.getInvoiceStats = async (req, res) => {
     });
   }
 };
-
 
