@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const { getPuppeteer, launchPuppeteerBrowser } = require('./puppeteerLauncher');
 
 function escapeHtml(text) {
