@@ -88,6 +88,10 @@ const invoiceSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Quotation',
     },
+    reference: {
+      type: String,
+      trim: true,
+    },
     customerName: {
       type: String,
       required: [true, 'Please provide customer name'],
@@ -181,18 +185,30 @@ invoiceSchema.pre('save', function () {
   this.deliveryCost = Math.round(normalizedDeliveryCost * 100) / 100;
 
   if (this.items && this.items.length > 0) {
-    this.subtotal = this.items.reduce((sum, item) => sum + (item.lineTotal || 0), 0);
+    const txRate = this.taxRate ?? 10;
+    // subtotal = sum of pre-tax bases (lineTotal already includes per-item GST)
+    this.subtotal = Math.round(this.items.reduce((sum, item) => {
+      const taxP = Number(item.taxPercent ?? txRate);
+      return sum + (Number(item.lineTotal || 0) / (1 + taxP / 100));
+    }, 0) * 100) / 100;
     if (this.discount > 0) {
       this.discountAmount =
         this.discountType === 'percentage'
-          ? (this.subtotal * this.discount) / 100
+          ? Math.round((this.subtotal * this.discount) / 100 * 100) / 100
           : this.discount;
     } else {
       this.discountAmount = 0;
     }
-    const taxableAmount = this.subtotal - this.discountAmount;
-    this.tax = (taxableAmount * (this.taxRate ?? 10)) / 100;
-    this.grandTotal = Math.round((taxableAmount + this.tax + this.deliveryCost) * 100) / 100;
+    // tax = sum of per-item GST amounts embedded in lineTotals
+    this.tax = Math.round(this.items.reduce((sum, item) => {
+      const taxP = Number(item.taxPercent ?? txRate);
+      const lt = Number(item.lineTotal || 0);
+      return sum + (lt - lt / (1 + taxP / 100));
+    }, 0) * 100) / 100;
+    const deliveryGst = Math.round(this.deliveryCost * txRate / 100 * 100) / 100;
+    this.grandTotal = Math.round(
+      (this.subtotal - this.discountAmount + this.tax + this.deliveryCost + deliveryGst) * 100
+    ) / 100;
   }
   // Remaining balance and payment status
   const grandTotalCents = toCents(this.grandTotal || 0);
