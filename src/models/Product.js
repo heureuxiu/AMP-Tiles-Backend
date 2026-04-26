@@ -74,7 +74,7 @@ const productSchema = new mongoose.Schema(
       type: String,
       enum: { values: ['sqft', 'sqm'], message: 'Must be sq ft or sq meter' },
       trim: true,
-      default: 'sqft',
+      default: 'sqm',
     },
     weightPerBox: {
       type: Number,
@@ -131,7 +131,7 @@ const productSchema = new mongoose.Schema(
     },
     unit: {
       type: String,
-      default: 'boxes',
+      default: 'sqm',
       trim: true,
     },
     image: {
