@@ -1,3 +1,5 @@
+  const fs = require('fs');
+  const path = require('path');
   const { getPuppeteer, launchPuppeteerBrowser } = require('./puppeteerLauncher');
 
   function escapeHtml(text) {
@@ -46,10 +48,38 @@
     if (Number.isInteger(rounded)) return String(rounded);
     return rounded.toFixed(3).replace(/\.?0+$/, '');
   }
+  const SQFT_PER_SQM = 10.764;
+
+  function getDisplayQuantity(item) {
+    const unitType = String(item?.unitType || '').toLowerCase();
+    const coverageSqm = Number(item?.coverageSqm);
+    if (Number.isFinite(coverageSqm) && coverageSqm > 0) {
+      if (
+        unitType.includes('sqft') ||
+        unitType.includes('sq ft') ||
+        unitType.includes('sqfeet')
+      ) {
+        return formatQuantity(coverageSqm * SQFT_PER_SQM);
+      }
+      if (
+        unitType.includes('sqm') ||
+        unitType.includes('sq meter') ||
+        unitType.includes('sqmetre')
+      ) {
+        return formatQuantity(coverageSqm);
+      }
+    }
+    return formatQuantity(item?.quantity ?? 0);
+  }
 
   function getItemSize(item) {
     const rawSize = item?.product?.size ?? item?.size;
     return rawSize ? String(rawSize) : '';
+  }
+
+  function getItemSku(item) {
+    const rawSku = item?.sku ?? item?.product?.sku;
+    return rawSku ? String(rawSku) : '';
   }
 
   function getDeliveryAddress(source) {
@@ -84,36 +114,44 @@
     const inv = invoice;
     const deliveryAddress = getDeliveryAddress(inv);
 
-    const rowsHtml = (inv.items || []).map(
+    // Derive effective GST rate from items (each item stores taxPercent); fallback to invoice taxRate or 10
+    const items = inv.items || [];
+    const effectiveTaxRate = items.length > 0
+      ? Number(items[0].taxPercent ?? inv.taxRate ?? 10)
+      : Number(inv.taxRate ?? 10);
+    const taxRate = effectiveTaxRate > 0 ? effectiveTaxRate : 10;
+
+    const rowsHtml = items.map(
       (item) => `
       <tr>
         <td>${escapeHtml(item.productName)}</td>
+        <td>${escapeHtml(getItemSku(item))}</td>
         <td>${escapeHtml(getItemSize(item))}</td>
         <td>${escapeHtml(item.unitType || '')}</td>
-        <td class="center">${escapeHtml(formatQuantity(item.quantity))}</td>
+        <td class="center">${escapeHtml(getDisplayQuantity(item))}</td>
         <td class="right">${formatNumber(item.rate)}</td>
-        <td class="center">${item.taxPercent ? item.taxPercent + '%' : (inv.taxRate ? inv.taxRate + '%' : '10%')}</td>
+        <td class="center">${item.discountPercent != null && item.discountPercent > 0 ? item.discountPercent + '%' : '-'}</td>
+        <td class="center">${item.taxPercent != null ? item.taxPercent + '%' : taxRate + '%'}</td>
         <td class="right">${formatNumber(item.lineTotal)}</td>
       </tr>`
     ).join('');
 
-    const subtotal = inv.subtotal ?? (inv.items || []).reduce((s, i) => s + (i.lineTotal || 0), 0);
+    // Recompute totals from lineTotals for accuracy (avoids relying on potentially stale stored values)
+    const itemsPreTax = Math.round(items.reduce((sum, item) => {
+      const taxP = Number(item.taxPercent ?? taxRate);
+      return sum + (Number(item.lineTotal || 0) / (1 + taxP / 100));
+    }, 0) * 100) / 100;
+    const itemsGst = Math.round(items.reduce((sum, item) => {
+      const taxP = Number(item.taxPercent ?? taxRate);
+      const lt = Number(item.lineTotal || 0);
+      return sum + (lt - lt / (1 + taxP / 100));
+    }, 0) * 100) / 100;
     const discountAmount = inv.discountAmount ?? inv.discount ?? 0;
-    const tax = inv.tax ?? 0;
-    const baseTotal = subtotal - discountAmount + tax;
-    const parsedDeliveryCost = Number(inv.deliveryCost);
-    const fallbackDeliveryCost = Math.max(
-      0,
-      Math.round((Number(inv.grandTotal) - baseTotal) * 100) / 100
-    );
-    const deliveryCost = Number.isFinite(parsedDeliveryCost)
-      ? Math.max(0, parsedDeliveryCost)
-      : Number.isFinite(fallbackDeliveryCost)
-        ? fallbackDeliveryCost
-        : 0;
-    const grandTotal = Number.isFinite(Number(inv.grandTotal))
-      ? Number(inv.grandTotal)
-      : Math.round((baseTotal + deliveryCost) * 100) / 100;
+    const deliveryCost = Math.max(0, Number(inv.deliveryCost) || 0);
+    const deliveryGst = Math.round(deliveryCost * (taxRate / 100) * 100) / 100;
+    const deliveryTotal = Math.round((deliveryCost + deliveryGst) * 100) / 100;
+    const grandTotal = Math.round((itemsPreTax - discountAmount + itemsGst + deliveryCost + deliveryGst) * 100) / 100;
+
     const grandTotalCents = Math.max(0, toCents(grandTotal));
     const paidCents = Math.max(0, Math.min(grandTotalCents, toCents(inv.amountPaid)));
     const outstandingCents = Math.max(0, grandTotalCents - paidCents);
@@ -123,18 +161,24 @@
     const paymentStatusLabel = getPaymentStatusLabel(paymentStatus);
 
     const dueDateLabel = inv.dueDate ? formatDate(inv.dueDate) : 'N/A';
-    const taxRate = inv.taxRate || 10;
+    const referenceLabel = String(
+      inv.reference || (inv.quotation && inv.quotation.quotationNumber) || ''
+    ).trim();
 
-    // Delivery row for the table
+    const invoiceStatusLabel = String(inv.status || 'draft')
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase());
     const deliveryRowHtml = deliveryCost > 0 ? `
       <tr>
         <td>Delivery Cost</td>
         <td></td>
         <td></td>
+        <td></td>
         <td class="center">1</td>
         <td class="right">${formatNumber(deliveryCost)}</td>
+        <td class="center">-</td>
         <td class="center">${taxRate}%</td>
-        <td class="right">${formatNumber(deliveryCost)}</td>
+        <td class="right">${formatNumber(deliveryTotal)}</td>
       </tr>` : '';
 
     return `
@@ -171,6 +215,14 @@
       .logo-company img {
         height: 54px;
         margin-bottom: 4px;
+      }
+      .top-reference {
+        font-size: 11.5px;
+        color: #333;
+        margin-top: 2px;
+      }
+      .top-reference strong {
+        color: #1a1a2e;
       }
 
       /* ── Header grid: customer left, meta+company right ── */
@@ -358,6 +410,7 @@
       <div class="doc-title">TAX INVOICE</div>
       <div class="logo-company">
         ${logoSrc ? `<img src="${logoSrc}" alt="Logo" />` : ''}
+        ${referenceLabel ? `<div class="top-reference"><strong>Reference:</strong> ${escapeHtml(referenceLabel)}</div>` : ''}
       </div>
     </div>
 
@@ -387,11 +440,11 @@
         </tr>
         <tr>
           <td class="label-col">Reference</td>
-          <td class="value-col">${inv.quotation && inv.quotation.quotationNumber ? escapeHtml(inv.quotation.quotationNumber) : (inv.reference ? escapeHtml(inv.reference) : '')}</td>
+          <td class="value-col">${escapeHtml(referenceLabel)}</td>
         </tr>
         <tr>
           <td class="label-col">Status</td>
-          <td class="value-col">${escapeHtml(paymentStatusLabel)}</td>
+          <td class="value-col">${escapeHtml(invoiceStatusLabel)}</td>
         </tr>
         <tr>
           <td class="label-col">ABN</td>
@@ -404,13 +457,15 @@
     <table class="items">
       <thead>
         <tr>
-          <th>Description</th>
-          <th>Size</th>
-          <th>Unit</th>
-          <th class="center">Quantity</th>
-          <th class="right">Unit Price</th>
-          <th class="center">GST</th>
-          <th class="right">Amount AUD</th>
+          <th>PRODUCT</th>
+          <th>SKU</th>
+          <th>SIZE</th>
+          <th>UNIT</th>
+          <th class="center">QTY</th>
+          <th class="right">RATE</th>
+          <th class="center">DISC%</th>
+          <th class="center">TAX%</th>
+          <th class="right">AMOUNT AUD</th>
         </tr>
       </thead>
       <tbody>
@@ -423,15 +478,13 @@
     <div class="totals-wrapper">
       <table class="totals-table">
         <tr>
-          <td class="t-label">Subtotal</td>
-          <td class="t-value">${formatNumber(subtotal)}</td>
+          <td class="t-label">Subtotal (ex. GST)</td>
+          <td class="t-value">${formatNumber(itemsPreTax)}</td>
         </tr>
         ${discountAmount > 0 ? `<tr><td class="t-label">Discount</td><td class="t-value">-${formatNumber(discountAmount)}</td></tr>` : ''}
+        ${itemsGst > 0 ? `<tr><td class="t-label">Items GST (${taxRate}%)</td><td class="t-value">${formatNumber(itemsGst)}</td></tr>` : ''}
         ${deliveryCost > 0 ? `<tr><td class="t-label">Delivery Cost</td><td class="t-value">${formatNumber(deliveryCost)}</td></tr>` : ''}
-        <tr>
-          <td class="t-label">TOTAL GST ${taxRate}%</td>
-          <td class="t-value">${formatNumber(tax)}</td>
-        </tr>
+        ${deliveryGst > 0 ? `<tr><td class="t-label">Delivery GST (${taxRate}%)</td><td class="t-value">${formatNumber(deliveryGst)}</td></tr>` : ''}
         <tr class="grand-row">
           <td class="t-label">TOTAL AUD</td>
           <td class="t-value">${formatNumber(grandTotal)}</td>
@@ -442,8 +495,10 @@
     <!-- Payment Info -->
     <div class="payment-section">
       <div class="ps-row">
+        <span><span class="ps-label">Total Amount:</span> <span class="ps-value">${formatNumber(grandTotal)}</span></span>
         <span><span class="ps-label">Amount Received:</span> <span class="ps-value">${formatNumber(paidCents / 100)}</span></span>
-        <span><span class="ps-label">Outstanding:</span> <span class="ps-value">${formatNumber(outstandingCents / 100)}</span></span>
+        <span><span class="ps-label">Remaining:</span> <span class="ps-value">${formatNumber(outstandingCents / 100)}</span></span>
+        ${inv.paymentMethod ? `<span><span class="ps-label">Method:</span> <span class="ps-value">${escapeHtml(String(inv.paymentMethod).replace(/_/g, ' '))}</span></span>` : ''}
       </div>
       <span class="badge ${paymentStatus === 'paid' ? 'badge-paid' : paymentStatus === 'partially_paid' ? 'badge-partial' : 'badge-unpaid'}">${escapeHtml(paymentStatusLabel)}</span>
     </div>
