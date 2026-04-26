@@ -363,6 +363,98 @@ function parseBooleanLike(value, fallback) {
   return fallback;
 }
 
+const SQM_PER_SQFT = 0.092903;
+
+function roundQty(value) {
+  return Math.round((Number(value) || 0) * 1000) / 1000;
+}
+
+function normalizePoUnitType(value) {
+  const normalized = String(value || 'box')
+    .toLowerCase()
+    .replace(/[\s._-]+/g, '');
+
+  if (normalized.includes('sqm') || normalized.includes('sqmeter') || normalized.includes('sqmetre')) {
+    return 'sqm';
+  }
+  if (normalized.includes('sqft') || normalized.includes('sqfeet') || normalized.includes('ft2')) {
+    return 'sqft';
+  }
+  if (normalized.includes('piece')) return 'piece';
+  if (normalized.includes('pallet')) return 'pallet';
+  return 'box';
+}
+
+function getSqmPerBox(product) {
+  const coveragePerBox = Number(product?.coveragePerBox) || 0;
+  if (coveragePerBox <= 0) return 0;
+  return product?.coveragePerBoxUnit === 'sqm'
+    ? coveragePerBox
+    : coveragePerBox * SQM_PER_SQFT;
+}
+
+function createStockUnitValidationError(message) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  return error;
+}
+
+function convertQuantityToSqm({ quantity, unitType, product }) {
+  const qty = Number(quantity) || 0;
+  if (qty <= 0) return 0;
+
+  const normalizedUnit = normalizePoUnitType(unitType);
+  const sqmPerBox = getSqmPerBox(product);
+
+  if (normalizedUnit === 'sqm') return roundQty(qty);
+  if (normalizedUnit === 'sqft') return roundQty(qty * SQM_PER_SQFT);
+
+  if (normalizedUnit === 'box') {
+    if (sqmPerBox <= 0) {
+      throw createStockUnitValidationError(
+        `Cannot convert boxes to sqm for product "${product?.name || ''}". Please set coverage per box first.`
+      );
+    }
+    return roundQty(qty * sqmPerBox);
+  }
+
+  if (normalizedUnit === 'piece') {
+    const tilesPerBox = Number(product?.tilesPerBox) || 0;
+    if (sqmPerBox <= 0 || tilesPerBox <= 0) {
+      throw createStockUnitValidationError(
+        `Cannot convert pieces to sqm for product "${product?.name || ''}". Please set coverage per box and tiles per box.`
+      );
+    }
+    const sqmPerPiece = sqmPerBox / tilesPerBox;
+    return roundQty(qty * sqmPerPiece);
+  }
+
+  throw createStockUnitValidationError(
+    `Unsupported unit "${unitType}" for sqm-only inventory updates.`
+  );
+}
+
+function getBoxesEquivalentFromSqm(receivedSqm, product) {
+  const sqmPerBox = getSqmPerBox(product);
+  if (sqmPerBox <= 0) {
+    return {
+      exactBoxes: null,
+      wholeBoxes: null,
+      sqmPerBox: null,
+    };
+  }
+
+  const exactBoxes = receivedSqm / sqmPerBox;
+  const roundedExactBoxes = roundQty(exactBoxes);
+  const wholeBoxes = Math.ceil(exactBoxes - 1e-9);
+
+  return {
+    exactBoxes: roundedExactBoxes,
+    wholeBoxes,
+    sqmPerBox: roundQty(sqmPerBox),
+  };
+}
+
 // @desc    Get all purchase orders with optional filtering
 // @route   GET /api/purchase-orders
 // @access  Private
@@ -484,9 +576,10 @@ function buildItem(product, item, forcedRate) {
   let coverageSqm = null;
   if (product && (product.coveragePerBox || product.tilesPerBox)) {
     const coveragePerBox = Number(product.coveragePerBox) || 0;
-    const perBox = product.coveragePerBoxUnit === 'sqm' ? coveragePerBox : (coveragePerBox * 0.092903) || 0;
+    const perBox = product.coveragePerBoxUnit === 'sqm' ? coveragePerBox : (coveragePerBox * SQM_PER_SQFT) || 0;
     if (item.unitType === 'Box' && perBox) coverageSqm = qty * perBox;
-    else if (item.unitType === 'Sq Ft' && qty) coverageSqm = Math.round((qty * 0.092903) * 100) / 100;
+    else if ((item.unitType === 'Sqm' || item.unitType === 'Sq Meter') && qty) coverageSqm = qty;
+    else if (item.unitType === 'Sq Ft' && qty) coverageSqm = Math.round((qty * SQM_PER_SQFT) * 100) / 100;
   }
   return {
     product: product._id,
@@ -863,7 +956,7 @@ exports.sendPurchaseOrderToSupplier = async (req, res) => {
   }
 };
 
-// @desc    Receive goods (per-line quantities). Updates stock only for quantityReceived.
+// @desc    Receive goods (per-line quantities). Updates inventory in sqm only.
 // @route   POST /api/purchase-orders/:id/receive
 // @access  Private
 exports.receivePurchaseOrder = async (req, res) => {
@@ -875,6 +968,9 @@ exports.receivePurchaseOrder = async (req, res) => {
     );
     let stockUpdateCount = 0;
     let receivedQuantityTotal = 0;
+    let receivedSqmTotal = 0;
+    let boxesEquivalentTotal = 0;
+    let boxesRoundedUpTotal = 0;
 
     if (!purchaseOrder) {
       return res.status(404).json({
@@ -924,30 +1020,51 @@ exports.receivePurchaseOrder = async (req, res) => {
         if (r.batchNumber) item.batchNumber = r.batchNumber;
         item.receivedDate = item.receivedDate || receivedDate;
 
-        // Increase product stock by quantityReceived only (when automatic mode is enabled)
+        // Increase product stock in sqm only (when automatic mode is enabled)
         if (qtyReceived > 0 && item.product && applyStockUpdate) {
           const product = await Product.findById(item.product._id || item.product);
           if (product) {
-            const previousStock = Number(product.stock || 0);
-            product.stock = (product.stock || 0) + qtyReceived;
+            const receivedSqm = convertQuantityToSqm({
+              quantity: qtyReceived,
+              unitType: item.unitType,
+              product,
+            });
+            const previousStock = roundQty(Number(product.stock || 0));
+            product.stock = roundQty(previousStock + receivedSqm);
+            product.unit = 'sqm';
             await product.save();
             stockUpdateCount += 1;
+            receivedSqmTotal = roundQty(receivedSqmTotal + receivedSqm);
+
+            const boxes = getBoxesEquivalentFromSqm(receivedSqm, product);
+            if (boxes.exactBoxes != null) {
+              boxesEquivalentTotal = roundQty(boxesEquivalentTotal + boxes.exactBoxes);
+            }
+            if (boxes.wholeBoxes != null) {
+              boxesRoundedUpTotal += boxes.wholeBoxes;
+            }
 
             const poRef = purchaseOrder.poNumber || purchaseOrder._id.toString();
 
             await StockTransaction.create({
               product: product._id,
               type: 'stock-in',
-              quantity: qtyReceived,
+              quantity: receivedSqm,
               previousStock,
               newStock: product.stock,
-              remarks: `PO ${poRef} received${r.batchNumber ? ` (Batch: ${r.batchNumber})` : ''}`.trim(),
+              remarks: `PO ${poRef} received ${roundQty(receivedSqm)} sqm from ${qtyReceived} ${item.unitType || 'unit'}${r.batchNumber ? ` (Batch: ${r.batchNumber})` : ''}`.trim(),
               sourceType: 'purchase_order',
               sourceId: String(purchaseOrder._id),
               sourceRef: poRef,
               metadata: {
                 batchNumber: r.batchNumber || '',
                 damagedQuantity: damaged,
+                sourceQuantityReceived: qtyReceived,
+                sourceUnitType: item.unitType || '',
+                receivedSqm,
+                boxesEquivalent: boxes.exactBoxes,
+                boxesRoundedUp: boxes.wholeBoxes,
+                sqmPerBox: boxes.sqmPerBox,
               },
               createdBy: req.user.id,
             });
@@ -979,7 +1096,7 @@ exports.receivePurchaseOrder = async (req, res) => {
     );
 
     const message = applyStockUpdate
-      ? 'Goods receiving updated and stock increased for received quantities'
+      ? 'Goods receiving updated and stock increased in sqm only'
       : 'Goods receiving updated. Automatic stock update is disabled; use manual stock update if you need to adjust inventory.';
 
     res.status(200).json({
@@ -988,11 +1105,14 @@ exports.receivePurchaseOrder = async (req, res) => {
       stockUpdateMode: applyStockUpdate ? 'automatic' : 'manual',
       stockUpdateCount,
       receivedQuantityTotal,
+      receivedSqmTotal,
+      boxesEquivalentTotal,
+      boxesRoundedUpTotal,
       purchaseOrder,
     });
   } catch (error) {
     console.error('Error receiving purchase order:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message: 'Failed to receive purchase order',
       error: error.message,
