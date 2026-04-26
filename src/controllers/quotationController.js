@@ -44,6 +44,7 @@ function formatQuantity(value) {
 }
 
 const DEFAULT_DELIVERY_COST = 0;
+const DELIVERY_GST_RATE = 10;
 const COMPANY_NAME = 'AMP TILES PTY LTD';
 
 function roundMoney(value) {
@@ -56,12 +57,20 @@ function normalizeDeliveryCost(value) {
   return roundMoney(numeric);
 }
 
+function calculateDeliveryGst(deliveryCost) {
+  const normalizedDeliveryCost = normalizeDeliveryCost(deliveryCost);
+  return roundMoney((normalizedDeliveryCost * DELIVERY_GST_RATE) / 100);
+}
+
 function calculateQuotationGrandTotal({ subtotal, discount, tax, deliveryCost }) {
+  const normalizedDeliveryCost = normalizeDeliveryCost(deliveryCost);
+  const deliveryGst = calculateDeliveryGst(normalizedDeliveryCost);
   return roundMoney(
     (Number(subtotal) || 0) -
       (Number(discount) || 0) +
       (Number(tax) || 0) +
-      normalizeDeliveryCost(deliveryCost)
+      normalizedDeliveryCost +
+      deliveryGst
   );
 }
 
@@ -77,15 +86,17 @@ function getQuotationAmountSnapshot(quotation) {
     : Number.isFinite(fallbackDelivery)
       ? fallbackDelivery
       : DEFAULT_DELIVERY_COST;
+  const deliveryGst = calculateDeliveryGst(deliveryCost);
   const grandTotal = Number.isFinite(Number(quotation?.grandTotal))
     ? Number(quotation.grandTotal)
-    : baseTotal + deliveryCost;
+    : baseTotal + deliveryCost + deliveryGst;
 
   return {
     subtotal: roundMoney(subtotal),
     discount: roundMoney(discount),
     tax: roundMoney(tax),
     deliveryCost: roundMoney(deliveryCost),
+    deliveryGst: roundMoney(deliveryGst),
     grandTotal: roundMoney(grandTotal),
   };
 }
@@ -172,6 +183,12 @@ function buildFallbackQuotationEmail(quotation) {
       <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Delivery Cost</td>
       <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${escapeHtml(formatCurrency(amounts.deliveryCost))}</td>
     </tr>`,
+    amounts.deliveryGst > 0
+      ? `<tr>
+          <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Delivery GST (${DELIVERY_GST_RATE}%)</td>
+          <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${escapeHtml(formatCurrency(amounts.deliveryGst))}</td>
+        </tr>`
+      : '',
     `<tr>
       <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:700;">Grand Total</td>
       <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:700;">${escapeHtml(grandTotal)}</td>
@@ -196,6 +213,9 @@ function buildFallbackQuotationEmail(quotation) {
     amounts.discount > 0 ? `Discount: -${formatCurrency(amounts.discount)}` : '',
     amounts.tax > 0 ? `Tax (GST): ${formatCurrency(amounts.tax)}` : '',
     `Delivery Cost: ${formatCurrency(amounts.deliveryCost)}`,
+    amounts.deliveryGst > 0
+      ? `Delivery GST (${DELIVERY_GST_RATE}%): ${formatCurrency(amounts.deliveryGst)}`
+      : '',
     `Grand Total: ${grandTotal}`,
     '',
     'Items:',
@@ -239,6 +259,11 @@ function buildFallbackQuotationEmail(quotation) {
             : ''
         }
         <strong>Delivery Cost:</strong> ${escapeHtml(formatCurrency(amounts.deliveryCost))}<br/>
+        ${
+          amounts.deliveryGst > 0
+            ? `<strong>Delivery GST (${DELIVERY_GST_RATE}%):</strong> ${escapeHtml(formatCurrency(amounts.deliveryGst))}<br/>`
+            : ''
+        }
         <strong>Grand Total:</strong> ${escapeHtml(grandTotal)}
       </p>
 
@@ -619,6 +644,54 @@ function getSqmPerBox(product) {
   return covUnit === 'sqm' ? covPerBox : covPerBox / SQFT_PER_SQM;
 }
 
+function getTilesPerBox(product) {
+  const tilesPerBox = Number(product.tilesPerBox) || 0;
+  return tilesPerBox > 0 ? tilesPerBox : 0;
+}
+
+function getSqmPerPiece(product) {
+  const sqmPerBox = getSqmPerBox(product);
+  const tilesPerBox = getTilesPerBox(product);
+  if (sqmPerBox <= 0 || tilesPerBox <= 0) return 0;
+  return sqmPerBox / tilesPerBox;
+}
+
+function getDefaultRatePerSqm(product) {
+  const baseRate = Number(product?.retailPrice ?? product?.price);
+  if (!Number.isFinite(baseRate) || baseRate < 0) return 0;
+
+  const pricingUnit = product?.pricingUnit || 'per_box';
+  if (pricingUnit === 'per_sqm') return baseRate;
+  if (pricingUnit === 'per_sqft') return baseRate * SQFT_PER_SQM;
+
+  const sqmPerBox = getSqmPerBox(product);
+  if (pricingUnit === 'per_box') {
+    return sqmPerBox > 0 ? baseRate / sqmPerBox : baseRate;
+  }
+
+  const sqmPerPiece = getSqmPerPiece(product);
+  if (pricingUnit === 'per_piece') {
+    return sqmPerPiece > 0 ? baseRate / sqmPerPiece : baseRate;
+  }
+
+  return baseRate;
+}
+
+function resolveQuotationRatePerSqm(product, item) {
+  const rawRate = item?.rate;
+  const parsedRate = Number(rawRate);
+  if (
+    rawRate !== undefined &&
+    rawRate !== null &&
+    rawRate !== '' &&
+    Number.isFinite(parsedRate) &&
+    parsedRate >= 0
+  ) {
+    return parsedRate;
+  }
+  return getDefaultRatePerSqm(product);
+}
+
 function roundQty(value) {
   return Math.round((Number(value) || 0) * 1000) / 1000;
 }
@@ -675,35 +748,51 @@ function getItemCoverageSqm(product, item) {
   const quantity = Number(item.quantity) || 0;
   const itemUnit = normalizeItemUnitType(item.unitType);
   const sqmPerBox = getSqmPerBox(product);
-  const hasCoveragePerBox = sqmPerBox > 0;
+  const sqmPerPiece = getSqmPerPiece(product);
 
   if (itemUnit === 'box') {
-    return hasCoveragePerBox ? quantity * sqmPerBox : null;
+    return sqmPerBox > 0 ? quantity * sqmPerBox : quantity;
   }
   if (itemUnit === 'sqm') {
-    return hasCoveragePerBox ? quantity * sqmPerBox : quantity;
+    return quantity;
   }
   if (itemUnit === 'sqft') {
-    return hasCoveragePerBox ? quantity * sqmPerBox : quantity / SQFT_PER_SQM;
+    return quantity / SQFT_PER_SQM;
+  }
+  if (itemUnit === 'piece') {
+    return sqmPerPiece > 0 ? quantity * sqmPerPiece : quantity;
   }
   return null;
 }
 
 function getItemStockDemand(product, item) {
   const quantity = Number(item.quantity) || 0;
-  const stockUnit = normalizeStockUnit(product.unit, product.pricingUnit);
-  if (stockUnit === 'box' || stockUnit === 'piece') {
-    return quantity;
-  }
-
   const coverageSqm = getItemCoverageSqm(product, item);
   if (coverageSqm == null) {
     return quantity;
   }
+
+  const stockUnit = normalizeStockUnit(product.unit, product.pricingUnit);
   if (stockUnit === 'sqm') {
     return coverageSqm;
   }
-  return coverageSqm * SQFT_PER_SQM;
+  if (stockUnit === 'sqft') {
+    return coverageSqm * SQFT_PER_SQM;
+  }
+
+  const sqmPerBox = getSqmPerBox(product);
+  if (stockUnit === 'box') {
+    if (sqmPerBox > 0) return coverageSqm / sqmPerBox;
+    return quantity;
+  }
+
+  const sqmPerPiece = getSqmPerPiece(product);
+  if (stockUnit === 'piece') {
+    if (sqmPerPiece > 0) return coverageSqm / sqmPerPiece;
+    return quantity;
+  }
+
+  return quantity;
 }
 
 function getProductIdFromItem(item) {
@@ -720,61 +809,32 @@ function formatStockQty(value) {
   return rounded.toFixed(3).replace(/\.?0+$/, '');
 }
 
-// Helper to build one quotation item with discount/tax and optional tiles coverage
+// Helper to build one quotation item with canonical sqm quantity and configurable tax
 function buildQuotationItem(product, item) {
-  const quantity = Number(item.quantity) || 0;
-  const rate = Number(item.rate) || product.retailPrice || product.price || 0;
-  const unitType = item.unitType || 'Box';
-  const explicitCoverageSqm = Number(item.coverageSqm);
-  const pricingUnit = product.pricingUnit || 'per_box';
-  const discountPercent = Number(item.discountPercent) || 0;
+  const rate = resolveQuotationRatePerSqm(product, item);
+  const discountPercent = 0;
   const taxPercent =
-    item.taxPercent != null
+    item.taxPercent != null && item.taxPercent !== ''
       ? Number(item.taxPercent)
-      : product.taxPercent != null
-      ? product.taxPercent
       : 10;
-
-  const sqmPerBox = getSqmPerBox(product);
-  const coverageSqmFromBoxes = sqmPerBox > 0 ? quantity * sqmPerBox : null;
-
-  let billableQuantity = quantity;
-  if (pricingUnit === 'per_sqm' && coverageSqmFromBoxes != null) {
-    billableQuantity = coverageSqmFromBoxes;
-  } else if (pricingUnit === 'per_sqft' && coverageSqmFromBoxes != null) {
-    billableQuantity = coverageSqmFromBoxes * 10.764;
-  }
-
-  const base = billableQuantity * rate;
-  const discountAmount = (base * discountPercent) / 100;
-  const taxable = base - discountAmount;
-  const taxAmount = (taxable * taxPercent) / 100;
-  const lineTotal = Math.round((taxable + taxAmount) * 100) / 100;
-
-  // Tiles coverage in sqm (optional)
-  let coverageSqm = null;
-  if (Number.isFinite(explicitCoverageSqm) && explicitCoverageSqm > 0) {
-    coverageSqm = explicitCoverageSqm;
-  } else if (coverageSqmFromBoxes != null) {
-    coverageSqm = coverageSqmFromBoxes;
-  } else if (unitType === 'Sq Meter') {
-    coverageSqm = quantity;
-  } else if (unitType === 'Sq Ft') {
-    coverageSqm = quantity / 10.764;
-  }
+  const quantitySqm = roundQty(Math.max(0, Number(getItemCoverageSqm(product, item)) || 0));
+  const base = quantitySqm * rate;
+  const discountAmount = 0;
+  const taxAmount = (base * taxPercent) / 100;
+  const lineTotal = Math.round((base + taxAmount) * 100) / 100;
 
   return {
     populated: {
       product: product._id,
       productName: product.name,
       size: String(product.size ?? item.size ?? ''),
-      unitType,
-      quantity,
+      unitType: 'Sq Meter',
+      quantity: quantitySqm,
       rate,
       discountPercent,
       taxPercent,
       lineTotal,
-      coverageSqm: coverageSqm != null ? Math.round(coverageSqm * 1000) / 1000 : undefined,
+      coverageSqm: quantitySqm,
     },
     base,
     discountAmount,
@@ -856,10 +916,6 @@ async function assertRequestedStockAvailability(requestedByProduct, productMap, 
 
     if (!product) {
       throw createStockValidationError(`Product not found: ${productId}`, 404);
-    }
-
-    if (!isOwnStockProduct(product)) {
-      continue;
     }
 
     const onHandQty = roundQty(product.stock);
@@ -971,6 +1027,7 @@ exports.createQuotation = async (req, res) => {
       customerEmail,
       customerAddress,
       deliveryAddress,
+      reference,
       quotationDate,
       validUntil,
       items,
@@ -1030,6 +1087,7 @@ exports.createQuotation = async (req, res) => {
       customerEmail,
       customerAddress,
       deliveryAddress: String(deliveryAddress || customerAddress || '').trim() || undefined,
+      reference: String(reference || '').trim() || undefined,
       quotationDate: quotationDate || Date.now(),
       validUntil,
       items: populatedItems,
@@ -1117,6 +1175,7 @@ exports.updateQuotation = async (req, res) => {
       customerEmail,
       customerAddress,
       deliveryAddress,
+      reference,
       quotationDate,
       validUntil,
       items,
@@ -1196,6 +1255,9 @@ exports.updateQuotation = async (req, res) => {
     if (customerEmail !== undefined) quotation.customerEmail = customerEmail;
     if (customerAddress !== undefined) quotation.customerAddress = customerAddress;
     if (deliveryAddress !== undefined) quotation.deliveryAddress = deliveryAddress;
+    if (reference !== undefined) {
+      quotation.reference = String(reference || '').trim() || undefined;
+    }
     if (quotationDate) quotation.quotationDate = quotationDate;
     if (validUntil !== undefined) quotation.validUntil = validUntil;
     if (notes !== undefined) quotation.notes = notes;
@@ -1307,7 +1369,7 @@ exports.convertToInvoice = async (req, res) => {
         (item.product && typeof item.product === 'object' ? item.product.size : '') ||
         item.size ||
         '',
-      unitType: item.unitType || 'Box',
+      unitType: item.unitType || 'Sq Meter',
       quantity: item.quantity,
       rate: item.rate,
       discountPercent: item.discountPercent || 0,
@@ -1322,6 +1384,7 @@ exports.convertToInvoice = async (req, res) => {
     // Create actual Invoice from quotation data
     const invoice = await Invoice.create({
       quotation: quotation._id,
+      reference: String(quotation.reference || '').trim() || undefined,
       customerName: quotation.customerName,
       customerPhone: quotation.customerPhone,
       customerEmail: quotation.customerEmail,
