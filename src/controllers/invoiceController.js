@@ -4,6 +4,7 @@ const Product = require('../models/Product');
 const Quotation = require('../models/Quotation');
 const StockTransaction = require('../models/StockTransaction');
 const { generateInvoicePdf } = require('../utils/invoicePdf');
+const { generatePackingSlipPdf } = require('../utils/packingSlipPdf');
 
 let sendEmail = async () => {
   throw new Error('Email service is not available');
@@ -1000,6 +1001,7 @@ exports.createInvoice = async (req, res) => {
       try {
         await sendInvoiceEmailWithAttachment(populatedInvoice);
         emailSent = true;
+        await Invoice.findByIdAndUpdate(populatedInvoice._id, { emailSent: true, lastEmailedAt: new Date() });
         responseMessage = `Invoice created and emailed to ${normalizeEmail(populatedInvoice.customerEmail)}`;
       } catch (error) {
         emailError = summarizeEmailError(error);
@@ -1152,6 +1154,7 @@ exports.updateInvoice = async (req, res) => {
         const { emailPayload, customerEmail: recipientEmail } =
           await sendInvoiceEmailWithAttachment(updatedInvoice);
         emailSent = true;
+        await Invoice.findByIdAndUpdate(updatedInvoice._id, { emailSent: true, lastEmailedAt: new Date() });
         responseMessage = emailPayload.isFinalReceipt
           ? `Payment received in full. Final invoice emailed to ${recipientEmail}`
           : `Updated invoice emailed to ${recipientEmail}`;
@@ -1219,6 +1222,7 @@ exports.markInvoiceAsPaid = async (req, res) => {
         const { emailPayload, customerEmail: recipientEmail } =
           await sendInvoiceEmailWithAttachment(updatedInvoice);
         emailSent = true;
+        await Invoice.findByIdAndUpdate(updatedInvoice._id, { emailSent: true, lastEmailedAt: new Date() });
         responseMessage = emailPayload.isFinalReceipt
           ? `Payment received in full. Final invoice emailed to ${recipientEmail}`
           : `Updated invoice emailed to ${recipientEmail}`;
@@ -1270,6 +1274,7 @@ exports.sendInvoiceEmail = async (req, res) => {
     }
 
     const { customerEmail, emailPayload } = await sendInvoiceEmailWithAttachment(invoice);
+    await Invoice.findByIdAndUpdate(invoice._id, { emailSent: true, lastEmailedAt: new Date() });
 
     res.status(200).json({
       success: true,
@@ -1312,6 +1317,34 @@ exports.getInvoicePdf = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to generate invoice PDF',
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Get packing slip PDF for an invoice
+// @route   GET /api/invoices/:id/packing-slip
+// @access  Private
+exports.getPackingSlipPdf = async (req, res) => {
+  try {
+    const invoice = await Invoice.findById(req.params.id)
+      .populate('items.product', 'name sku size')
+      .lean();
+    if (!invoice) {
+      return res.status(404).json({ success: false, message: 'Invoice not found' });
+    }
+    const pdfBinary = await generatePackingSlipPdf(invoice);
+    const pdfBuffer = Buffer.isBuffer(pdfBinary) ? pdfBinary : Buffer.from(pdfBinary);
+    const filename = `packing-slip-${invoice.invoiceNumber || invoice._id}.pdf`.replace(/\s/g, '-');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', pdfBuffer.length);
+    res.send(pdfBuffer);
+  } catch (error) {
+    console.error('Get packing slip PDF error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to generate packing slip PDF',
       error: error.message,
     });
   }
@@ -1374,4 +1407,3 @@ exports.getInvoiceStats = async (req, res) => {
     });
   }
 };
-
