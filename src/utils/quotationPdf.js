@@ -362,7 +362,6 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
     <div class="doc-title">QUOTATION</div>
     <div class="logo-company">
       ${logoSrc ? `<img src="${logoSrc}" alt="Logo" />` : ''}
-      ${referenceLabel ? `<div class="top-reference"><strong>Reference:</strong> ${escapeHtml(referenceLabel)}</div>` : ''}
     </div>
   </div>
 
@@ -417,7 +416,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
         <th>SKU</th>
         <th>Size</th>
         <th>Unit</th>
-        <th class="center">Quantity</th>
+        <th class="center">Piece</th>
         <th class="right">Unit Price</th>
         <th class="center">GST</th>
         <th class="right">Amount AUD</th>
