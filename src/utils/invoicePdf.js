@@ -445,7 +445,6 @@
       <div class="doc-title">TAX INVOICE</div>
       <div class="logo-company">
         ${logoSrc ? `<img src="${logoSrc}" alt="Logo" />` : ''}
-        ${referenceLabel ? `<div class="top-reference"><strong>Reference:</strong> ${escapeHtml(referenceLabel)}</div>` : ''}
       </div>
     </div>
 
@@ -496,7 +495,7 @@
           <th>SKU</th>
           <th>SIZE</th>
           <th>UNIT</th>
-          <th class="center">QTY</th>
+          <th class="center">PIECE</th>
           <th class="right">RATE</th>
           <th class="center">DISC%</th>
           <th class="center">TAX%</th>
