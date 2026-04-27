@@ -191,7 +191,7 @@ function buildPurchaseOrderEmail(purchaseOrder) {
             <th style="padding:8px;border:1px solid #ddd;text-align:left;">Description</th>
             <th style="padding:8px;border:1px solid #ddd;text-align:left;">Size</th>
             <th style="padding:8px;border:1px solid #ddd;text-align:left;">Unit</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:right;">Qty</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:right;">Piece</th>
             <th style="padding:8px;border:1px solid #ddd;text-align:right;">Rate</th>
             <th style="padding:8px;border:1px solid #ddd;text-align:right;">Amount</th>
           </tr>
