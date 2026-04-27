@@ -151,6 +151,9 @@ const invoiceSchema = new mongoose.Schema(
     },
     paidDate: { type: Date },
 
+    emailSent: { type: Boolean, default: false },
+    lastEmailedAt: { type: Date },
+
     notes: { type: String, trim: true },
     terms: { type: String, trim: true },
     createdBy: {
