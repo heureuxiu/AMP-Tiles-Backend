@@ -1,5 +1,5 @@
   const fs = require('fs');
-  const path = require('path');
+  const { readLogoBase64 } = require('./logoResolver');
   const { getPuppeteer, launchPuppeteerBrowser } = require('./puppeteerLauncher');
 
   function escapeHtml(text) {
@@ -87,13 +87,7 @@
   }
 
   function getLogoBase64() {
-    try {
-      const logoPath = path.resolve(__dirname, '../../../client/public/assets/AMP-TILES-LOGO.png');
-      const logoBuffer = fs.readFileSync(logoPath);
-      return `data:image/png;base64,${logoBuffer.toString('base64')}`;
-    } catch (e) {
-      return '';
-    }
+    return readLogoBase64();
   }
 
   function buildInvoiceHtml(invoice, companyInfo = {}) {
