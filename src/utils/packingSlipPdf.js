@@ -185,7 +185,7 @@ function buildPackingSlipHtml(invoice) {
           <th>SKU</th>
           <th>Size</th>
           <th>Unit</th>
-          <th class="center">Piece</th>
+          <th class="center">Qty</th>
         </tr>
       </thead>
       <tbody>
