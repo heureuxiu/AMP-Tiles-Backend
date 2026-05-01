@@ -1465,6 +1465,9 @@ exports.convertToInvoice = async (req, res) => {
       customerName: quotation.customerName,
       customerPhone: quotation.customerPhone,
       customerEmail: quotation.customerEmail,
+      customerCcEmails: parseEmailList(quotation.customerCcEmails || []).filter(
+        (email) => email !== normalizeEmail(quotation.customerEmail)
+      ),
       customerAddress: quotation.customerAddress,
       deliveryAddress: getDeliveryAddress(quotation) || undefined,
       invoiceDate: quotation.quotationDate || new Date(),
