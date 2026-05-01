@@ -76,6 +76,10 @@ const quotationSchema = new mongoose.Schema(
       trim: true,
       lowercase: true,
     },
+    customerCcEmails: {
+      type: [String],
+      default: [],
+    },
     customerAddress: {
       type: String,
       trim: true,
