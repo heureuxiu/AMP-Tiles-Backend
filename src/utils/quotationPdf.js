@@ -99,7 +99,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
     name: companyInfo.name || 'AMP TILES PTY LTD',
     addressLine1: companyInfo.addressLine1 || 'Unit 15/55 Anderson Road',
     addressLine2: companyInfo.addressLine2 || 'SMEATON GRANGE',
-    addressLine3: companyInfo.addressLine3 || 'NSW 2560',
+    addressLine3: companyInfo.addressLine3 || 'NSW 2567',
     country: companyInfo.country || 'AUSTRALIA',
     abn: companyInfo.abn || '14 690 181 858',
     bank: companyInfo.bank || 'NAB',
