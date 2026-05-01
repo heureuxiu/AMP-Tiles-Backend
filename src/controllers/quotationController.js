@@ -350,6 +350,27 @@ function normalizeEmail(value) {
     .toLowerCase();
 }
 
+function parseEmailList(values) {
+  const rawValues = Array.isArray(values) ? values : [values];
+  const normalized = [];
+  const seen = new Set();
+
+  for (const rawValue of rawValues) {
+    const parts = String(rawValue || '')
+      .split(/[,\n;\s]+/g)
+      .map((part) => normalizeEmail(part))
+      .filter(Boolean);
+
+    for (const email of parts) {
+      if (seen.has(email)) continue;
+      seen.add(email);
+      normalized.push(email);
+    }
+  }
+
+  return normalized;
+}
+
 function summarizeEmailError(error, fallbackMessage = 'Failed to send quotation email') {
   return [
     error?.message || fallbackMessage,
@@ -361,7 +382,7 @@ function summarizeEmailError(error, fallbackMessage = 'Failed to send quotation 
     .join(' | ');
 }
 
-async function sendQuotationEmailWithAttachment(quotationDoc) {
+async function sendQuotationEmailWithAttachment(quotationDoc, options = {}) {
   const quotation = quotationDoc?.toObject ? quotationDoc.toObject() : quotationDoc;
   if (!quotation) {
     const error = new Error('Quotation not found');
@@ -369,7 +390,8 @@ async function sendQuotationEmailWithAttachment(quotationDoc) {
     throw error;
   }
 
-  const customerEmail = normalizeEmail(quotation.customerEmail);
+  const overrideTo = normalizeEmail(options.toEmail);
+  const customerEmail = overrideTo || normalizeEmail(quotation.customerEmail);
   if (!customerEmail) {
     const error = new Error(
       'Customer email is missing. Please add customer email before sending quotation.'
@@ -377,6 +399,7 @@ async function sendQuotationEmailWithAttachment(quotationDoc) {
     error.statusCode = 400;
     throw error;
   }
+  const ccEmails = parseEmailList(options.ccEmails);
 
   const pdfBuffer = await generateQuotationPdf(quotation);
   const emailPayload = buildQuotationEmail(quotation);
@@ -387,6 +410,7 @@ async function sendQuotationEmailWithAttachment(quotationDoc) {
 
   await sendEmail({
     to: customerEmail,
+    cc: ccEmails.length > 0 ? ccEmails.join(', ') : undefined,
     subject: emailPayload.subject,
     text: emailPayload.text,
     html: emailPayload.html,
@@ -401,6 +425,7 @@ async function sendQuotationEmailWithAttachment(quotationDoc) {
 
   return {
     customerEmail,
+    ccEmails,
     emailPayload,
   };
 }
@@ -544,7 +569,11 @@ exports.sendQuotationEmail = async (req, res) => {
       });
     }
 
-    await sendQuotationEmailWithAttachment(quotation);
+    const ccEmails = parseEmailList(quotation.customerCcEmails || []);
+    await sendQuotationEmailWithAttachment(quotation, {
+      toEmail: customerEmail,
+      ccEmails,
+    });
 
     if (quotation.status !== 'sent') {
       quotation.status = 'sent';
@@ -556,7 +585,9 @@ exports.sendQuotationEmail = async (req, res) => {
     res.status(200).json({
       success: true,
       emailSent: true,
-      message: `Quotation sent to ${customerEmail}`,
+      message: `Quotation sent to ${customerEmail}${
+        ccEmails.length > 0 ? ` (cc: ${ccEmails.join(', ')})` : ''
+      }`,
       quotation,
     });
   } catch (error) {
@@ -1039,6 +1070,8 @@ exports.createQuotation = async (req, res) => {
       terms,
       status,
       sendEmail: shouldSendEmail,
+      customerEmails,
+      customerCcEmails,
     } = req.body;
 
     // Validate items
@@ -1049,7 +1082,14 @@ exports.createQuotation = async (req, res) => {
       });
     }
 
-    if (shouldSendEmail && !String(customerEmail || '').trim()) {
+    const normalizedPrimaryEmail = normalizeEmail(customerEmail);
+    const normalizedCustomerEmails = parseEmailList([
+      normalizedPrimaryEmail,
+      customerEmails,
+      customerCcEmails,
+    ]);
+
+    if (shouldSendEmail && normalizedCustomerEmails.length === 0) {
       return res.status(400).json({
         success: false,
         message: 'Customer email is required to send quotation by email',
@@ -1080,11 +1120,14 @@ exports.createQuotation = async (req, res) => {
       deliveryCost: normalizedDeliveryCost,
     });
 
-    // Create quotation
+    const primaryEmail = normalizedPrimaryEmail || normalizedCustomerEmails[0] || undefined;
+    const ccEmails = normalizedCustomerEmails.filter((email) => email !== primaryEmail);
+
     const quotation = await Quotation.create({
       customerName,
       customerPhone,
-      customerEmail,
+      customerEmail: primaryEmail,
+      customerCcEmails: ccEmails,
       customerAddress,
       deliveryAddress: String(deliveryAddress || customerAddress || '').trim() || undefined,
       reference: String(reference || '').trim() || undefined,
@@ -1107,15 +1150,18 @@ exports.createQuotation = async (req, res) => {
       createdBy: req.user.id,
     });
 
-    // Populate references
     await quotation.populate('createdBy', 'name email');
     await quotation.populate('items.product', 'name sku description size');
 
     let emailSent = false;
     let emailError = null;
+
     if (shouldSendEmail) {
       try {
-        await sendQuotationEmailWithAttachment(quotation);
+        await sendQuotationEmailWithAttachment(quotation, {
+          toEmail: primaryEmail,
+          ccEmails,
+        });
         emailSent = true;
 
         if (quotation.status === 'draft') {
@@ -1131,13 +1177,36 @@ exports.createQuotation = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message:
-        shouldSendEmail && !emailSent
-          ? 'Quotation created, but email could not be sent'
-          : undefined,
+      message: shouldSendEmail
+        ? emailSent
+          ? `Quotation created and emailed to ${primaryEmail}${
+              ccEmails.length > 0 ? ` (cc: ${ccEmails.join(', ')})` : ''
+            }.`
+          : 'Quotation created, but email could not be sent.'
+        : undefined,
       quotation,
+      quotations: [quotation],
       emailSent,
       emailError,
+      emailStats: shouldSendEmail
+        ? {
+            total: 1,
+            sent: emailSent ? 1 : 0,
+            failed: emailSent ? 0 : 1,
+            recipients: {
+              to: primaryEmail || null,
+              cc: ccEmails,
+            },
+            failures: emailSent
+              ? []
+              : [
+                  {
+                    email: primaryEmail || '',
+                    error: emailError || 'Failed to send quotation email',
+                  },
+                ],
+          }
+        : undefined,
     });
   } catch (error) {
     res.status(error.statusCode || 400).json({
@@ -1253,6 +1322,14 @@ exports.updateQuotation = async (req, res) => {
     if (customerName) quotation.customerName = customerName;
     if (customerPhone !== undefined) quotation.customerPhone = customerPhone;
     if (customerEmail !== undefined) quotation.customerEmail = customerEmail;
+    if (customerCcEmails !== undefined) {
+      const effectivePrimaryEmail = normalizeEmail(
+        customerEmail !== undefined ? customerEmail : quotation.customerEmail
+      );
+      quotation.customerCcEmails = parseEmailList(customerCcEmails).filter(
+        (email) => email !== effectivePrimaryEmail
+      );
+    }
     if (customerAddress !== undefined) quotation.customerAddress = customerAddress;
     if (deliveryAddress !== undefined) quotation.deliveryAddress = deliveryAddress;
     if (reference !== undefined) {
