@@ -99,6 +99,7 @@ const invoiceSchema = new mongoose.Schema(
     },
     customerPhone: { type: String, trim: true },
     customerEmail: { type: String, trim: true, lowercase: true },
+    customerCcEmails: { type: [String], default: [] },
     customerAddress: { type: String, trim: true },
     deliveryAddress: { type: String, trim: true },
     invoiceDate: { type: Date, default: Date.now },
