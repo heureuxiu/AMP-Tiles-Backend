@@ -34,7 +34,7 @@ const DEFAULT_DELIVERY_COST = 0;
 const COMPANY_DETAILS = {
   name: 'AMP TILES PTY LTD',
   abn: '14 690 181 858',
-  address: 'Unit 15/55 Anderson Road, Smeaton Grange, NSW 2560',
+  address: 'Unit 15/55 Anderson Road, Smeaton Grange, NSW 2567',
 };
 const SQFT_PER_SQM = 10.764;
 const BANK_DETAILS = {
@@ -339,5 +339,4 @@ function buildInvoiceEmail(invoice) {
 module.exports = {
   buildInvoiceEmail,
 };
-
 
