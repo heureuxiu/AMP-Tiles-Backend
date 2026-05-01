@@ -63,7 +63,7 @@ function buildPackingSlipHtml(invoice) {
   const company = {
     name: 'AMP TILES PTY LTD',
     addressLine1: 'Unit 15/55 Anderson Road,',
-    addressLine2: 'Smeaton Grange, NSW 2560',
+    addressLine2: 'Smeaton Grange, NSW 2567',
     abn: '14 690 181 858',
   };
 
