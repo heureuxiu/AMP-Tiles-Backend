@@ -741,6 +741,27 @@ function normalizeEmail(value) {
     .toLowerCase();
 }
 
+function parseEmailList(values) {
+  const rawValues = Array.isArray(values) ? values : [values];
+  const normalized = [];
+  const seen = new Set();
+
+  for (const rawValue of rawValues) {
+    const parts = String(rawValue || '')
+      .split(/[,\n;\s]+/g)
+      .map((part) => normalizeEmail(part))
+      .filter(Boolean);
+
+    for (const email of parts) {
+      if (seen.has(email)) continue;
+      seen.add(email);
+      normalized.push(email);
+    }
+  }
+
+  return normalized;
+}
+
 function summarizeEmailError(error, fallbackMessage = 'Failed to send invoice email') {
   return [
     error?.message || fallbackMessage,
@@ -760,7 +781,8 @@ async function sendInvoiceEmailWithAttachment(invoiceDoc, options = {}) {
     throw error;
   }
 
-  const customerEmail = normalizeEmail(invoice.customerEmail);
+  const overrideTo = normalizeEmail(options.toEmail);
+  const customerEmail = overrideTo || normalizeEmail(invoice.customerEmail);
   if (!customerEmail) {
     const error = new Error(
       'Customer email is missing. Please add customer email before sending invoice.'
@@ -768,6 +790,7 @@ async function sendInvoiceEmailWithAttachment(invoiceDoc, options = {}) {
     error.statusCode = 400;
     throw error;
   }
+  const ccEmails = parseEmailList(options.ccEmails || invoice.customerCcEmails || []);
 
   const pdfBuffer = await generateInvoicePdf(invoice);
   const emailPayload = buildInvoiceEmail(invoice, options);
@@ -775,6 +798,7 @@ async function sendInvoiceEmailWithAttachment(invoiceDoc, options = {}) {
 
   await sendEmail({
     to: customerEmail,
+    cc: ccEmails.length > 0 ? ccEmails.join(', ') : undefined,
     subject: emailPayload.subject,
     text: emailPayload.text,
     html: emailPayload.html,
@@ -789,6 +813,7 @@ async function sendInvoiceEmailWithAttachment(invoiceDoc, options = {}) {
 
   return {
     customerEmail,
+    ccEmails,
     emailPayload,
   };
 }
@@ -906,6 +931,7 @@ exports.createInvoice = async (req, res) => {
       customerName,
       customerPhone,
       customerEmail,
+      customerCcEmails,
       customerAddress,
       deliveryAddress,
       invoiceDate,
@@ -963,6 +989,9 @@ exports.createInvoice = async (req, res) => {
       customerName,
       customerPhone,
       customerEmail,
+      customerCcEmails: parseEmailList(customerCcEmails).filter(
+        (email) => email !== normalizeEmail(customerEmail)
+      ),
       customerAddress,
       deliveryAddress: String(deliveryAddress || customerAddress || '').trim() || undefined,
       invoiceDate: invoiceDate || Date.now(),
@@ -1047,6 +1076,7 @@ exports.updateInvoice = async (req, res) => {
       customerName,
       customerPhone,
       customerEmail,
+      customerCcEmails,
       customerAddress,
       deliveryAddress,
       invoiceDate,
@@ -1086,6 +1116,14 @@ exports.updateInvoice = async (req, res) => {
     if (customerName) invoice.customerName = customerName;
     if (customerPhone !== undefined) invoice.customerPhone = customerPhone;
     if (customerEmail !== undefined) invoice.customerEmail = customerEmail;
+    if (customerCcEmails !== undefined) {
+      const effectivePrimaryEmail = normalizeEmail(
+        customerEmail !== undefined ? customerEmail : invoice.customerEmail
+      );
+      invoice.customerCcEmails = parseEmailList(customerCcEmails).filter(
+        (email) => email !== effectivePrimaryEmail
+      );
+    }
     if (customerAddress !== undefined) invoice.customerAddress = customerAddress;
     if (deliveryAddress !== undefined) invoice.deliveryAddress = deliveryAddress;
     if (reference !== undefined) {
@@ -1273,15 +1311,19 @@ exports.sendInvoiceEmail = async (req, res) => {
       });
     }
 
-    const { customerEmail, emailPayload } = await sendInvoiceEmailWithAttachment(invoice);
+    const { customerEmail, ccEmails, emailPayload } = await sendInvoiceEmailWithAttachment(invoice);
     await Invoice.findByIdAndUpdate(invoice._id, { emailSent: true, lastEmailedAt: new Date() });
 
     res.status(200).json({
       success: true,
       emailSent: true,
       message: emailPayload.isFinalReceipt
-        ? `Final payment receipt sent to ${customerEmail}`
-        : `Updated invoice sent to ${customerEmail}`,
+        ? `Final payment receipt sent to ${customerEmail}${
+            ccEmails.length > 0 ? ` (cc: ${ccEmails.join(', ')})` : ''
+          }`
+        : `Updated invoice sent to ${customerEmail}${
+            ccEmails.length > 0 ? ` (cc: ${ccEmails.join(', ')})` : ''
+          }`,
       invoice,
     });
   } catch (error) {
