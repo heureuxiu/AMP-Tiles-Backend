@@ -63,7 +63,7 @@ function getTransporter() {
   return cachedTransporter;
 }
 
-async function sendEmail({ to, subject, text, html, attachments }) {
+async function sendEmail({ to, cc, subject, text, html, attachments }) {
   const cfg = getSmtpConfig();
   const transporter = getTransporter();
 
@@ -74,6 +74,7 @@ async function sendEmail({ to, subject, text, html, attachments }) {
   return transporter.sendMail({
     from: fromValue,
     to,
+    cc,
     subject,
     text,
     html,
