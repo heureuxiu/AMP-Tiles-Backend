@@ -108,13 +108,20 @@ const purchaseOrderSchema = new mongoose.Schema(
 purchaseOrderSchema.pre('save', async function () {
   if (this.isNew && !this.poNumber) {
     const year = new Date().getFullYear();
-    const count = await this.constructor.countDocuments({
-      createdAt: {
-        $gte: new Date(`${year}-01-01`),
-        $lt: new Date(`${year + 1}-01-01`),
-      },
-    });
-    this.poNumber = `PO-${year}-${String(count + 1).padStart(4, '0')}`;
+    const prefix = `PO-${year}-`;
+    const latestForYear = await this.constructor
+      .findOne({
+        poNumber: { $regex: `^${prefix}\\d+$` },
+      })
+      .select('poNumber')
+      .sort({ poNumber: -1 })
+      .lean();
+
+    const latestSeq = latestForYear?.poNumber
+      ? Number.parseInt(String(latestForYear.poNumber).split('-').pop(), 10)
+      : 0;
+    const nextSeq = Number.isFinite(latestSeq) ? latestSeq + 1 : 1;
+    this.poNumber = `${prefix}${String(nextSeq).padStart(4, '0')}`;
   }
 });
 
