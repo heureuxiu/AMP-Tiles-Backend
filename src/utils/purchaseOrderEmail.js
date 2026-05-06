@@ -78,144 +78,36 @@ function getPurchaseOrderItemDetails(item) {
 }
 
 function buildPurchaseOrderEmail(purchaseOrder) {
-  const poNumber = purchaseOrder.poNumber || String(purchaseOrder._id || '');
   const supplierName = purchaseOrder.supplierName || purchaseOrder.supplier?.name || 'Supplier';
-  const poDate = formatDate(purchaseOrder.poDate);
-  const expectedDelivery = purchaseOrder.expectedDeliveryDate
-    ? formatDate(purchaseOrder.expectedDeliveryDate)
-    : 'N/A';
-  const currency = purchaseOrder.currency || 'AUD';
-  const amounts = getPurchaseOrderAmountSnapshot(purchaseOrder);
-  const grandTotal = formatCurrency(amounts.grandTotal, currency);
-
-  const rowsHtml = (purchaseOrder.items || [])
-    .map((item) => {
-      const details = getPurchaseOrderItemDetails(item);
-      return `<tr>
-        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.productName)}</td>
-        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.sku)}</td>
-        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.description)}</td>
-        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.size)}</td>
-        <td style="padding:8px;border:1px solid #ddd;text-align:left;">${escapeHtml(details.unit)}</td>
-        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${details.quantity}</td>
-        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${formatCurrency(details.rate, currency)}</td>
-        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${formatCurrency(details.amount, currency)}</td>
-      </tr>`;
-    })
-    .join('');
-  const totalsRowsHtml = [
-    `<tr>
-      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Subtotal</td>
-      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${escapeHtml(
-        formatCurrency(amounts.subtotal, currency)
-      )}</td>
-    </tr>`,
-    `<tr>
-      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Tax (GST)</td>
-      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${escapeHtml(
-        formatCurrency(amounts.tax, currency)
-      )}</td>
-    </tr>`,
-    `<tr>
-      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Delivery Cost</td>
-      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${escapeHtml(
-        formatCurrency(amounts.deliveryCost, currency)
-      )}</td>
-    </tr>`,
-    `<tr>
-      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:700;">Grand Total</td>
-      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:700;">${escapeHtml(
-        grandTotal
-      )}</td>
-    </tr>`,
-  ].join('');
-
-  const notesLine = purchaseOrder.notes ? `\nNotes: ${purchaseOrder.notes}` : '';
-  const termsLine = purchaseOrder.terms ? `\nTerms: ${purchaseOrder.terms}` : '';
-
   const text = [
-    `Purchase Order ${poNumber}`,
     `Dear ${supplierName},`,
     '',
-    'Please find the purchase order details below.',
+    'Please find attached our Purchase Order for your review and processing.',
     '',
-    `PO Number: ${poNumber}`,
-    `PO Date: ${poDate}`,
-    `Expected Delivery Date: ${expectedDelivery}`,
-    `Subtotal: ${formatCurrency(amounts.subtotal, currency)}`,
-    `Tax (GST): ${formatCurrency(amounts.tax, currency)}`,
-    `Delivery Cost: ${formatCurrency(amounts.deliveryCost, currency)}`,
-    `Grand Total: ${grandTotal}`,
+    'Could you kindly confirm stock availability for the items listed, along with the estimated delivery date? Your prompt confirmation will help us plan accordingly.',
     '',
-    'Items:',
-    ...(purchaseOrder.items || []).map((item) => {
-      const details = getPurchaseOrderItemDetails(item);
-      return `- ${details.productName} | SKU: ${details.sku} | Desc: ${details.description} | Size: ${details.size} | Unit: ${details.unit} | Qty: ${details.quantity} | Rate: ${formatCurrency(details.rate, currency)} | Amount: ${formatCurrency(details.amount, currency)}`;
-    }),
+    'Please let us know if there are any discrepancies or if further information is required.',
     '',
-    'Please see attached purchase order PDF for your records.',
-    notesLine,
-    termsLine,
+    'Thank you for your support.',
     '',
-    'Thank you,',
+    'Kind regards,',
+    'Prabin',
     'AMP Tiles',
-  ]
-    .filter(Boolean)
-    .join('\n');
+  ].join('\n');
 
   const html = `
     <div style="font-family: Arial, sans-serif; color: #111827; line-height: 1.4;">
-      <h2 style="margin:0 0 16px;">Purchase Order ${escapeHtml(poNumber)}</h2>
       <p>Dear ${escapeHtml(supplierName)},</p>
-      <p>Please find the purchase order details below.</p>
-      <p>
-        <strong>PO Date:</strong> ${escapeHtml(poDate)}<br/>
-        <strong>Expected Delivery Date:</strong> ${escapeHtml(expectedDelivery)}<br/>
-        <strong>Subtotal:</strong> ${escapeHtml(
-          formatCurrency(amounts.subtotal, currency)
-        )}<br/>
-        <strong>Tax (GST):</strong> ${escapeHtml(
-          formatCurrency(amounts.tax, currency)
-        )}<br/>
-        <strong>Delivery Cost:</strong> ${escapeHtml(
-          formatCurrency(amounts.deliveryCost, currency)
-        )}<br/>
-        <strong>Grand Total:</strong> ${escapeHtml(grandTotal)}
-      </p>
-
-      <table style="width:100%;border-collapse:collapse;margin:16px 0;">
-        <thead>
-          <tr>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Product</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left;">SKU</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Description</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Size</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Unit</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:right;">Piece</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:right;">Rate</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:right;">Amount</th>
-          </tr>
-        </thead>
-        <tbody>${rowsHtml}${totalsRowsHtml}</tbody>
-      </table>
-
-      ${
-        purchaseOrder.notes
-          ? `<p><strong>Notes:</strong> ${escapeHtml(purchaseOrder.notes)}</p>`
-          : ''
-      }
-      ${
-        purchaseOrder.terms
-          ? `<p><strong>Terms:</strong> ${escapeHtml(purchaseOrder.terms)}</p>`
-          : ''
-      }
-
-      <p style="margin-top:24px;">Thank you,<br/>AMP Tiles</p>
+      <p>Please find attached our Purchase Order for your review and processing.</p>
+      <p>Could you kindly confirm stock availability for the items listed, along with the estimated delivery date? Your prompt confirmation will help us plan accordingly.</p>
+      <p>Please let us know if there are any discrepancies or if further information is required.</p>
+      <p>Thank you for your support.</p>
+      <p style="margin-top:24px;">Kind regards,<br/>Prabin<br/>AMP Tiles</p>
     </div>
   `;
 
   return {
-    subject: `Purchase Order ${poNumber} from AMP Tiles`,
+    subject: 'Purchase Order Attached - Stock Confirmation Required',
     text,
     html,
   };
@@ -224,5 +116,3 @@ function buildPurchaseOrderEmail(purchaseOrder) {
 module.exports = {
   buildPurchaseOrderEmail,
 };
-
-
