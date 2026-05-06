@@ -65,6 +65,7 @@ function buildPurchaseOrderHtml(purchaseOrder, companyInfo = {}) {
       <td>${escapeHtml(item.productName || item.product?.name || '')}</td>
       <td>${escapeHtml(getItemSize(item))}</td>
       <td class="center">${escapeHtml(String(item.quantityOrdered ?? 0))}</td>
+      <td class="center">${escapeHtml(item.unitType || '')}</td>
       <td class="right">${formatNumber(item.rate)}</td>
       <td class="center">${item.taxPercent ? item.taxPercent + '%' : '10%'}</td>
       <td class="right">${formatNumber(item.lineTotal)}</td>
@@ -321,6 +322,7 @@ function buildPurchaseOrderHtml(purchaseOrder, companyInfo = {}) {
         <th>Description</th>
         <th>Size</th>
         <th class="center">Quantity</th>
+        <th class="center">Unit</th>
         <th class="right">Unit Price</th>
         <th class="center">GST</th>
         <th class="right">Amount ${escapeHtml(currency)}</th>
