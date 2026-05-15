@@ -13,7 +13,7 @@ const purchaseOrderItemSchema = new mongoose.Schema(
     unitType: {
       type: String,
       required: true,
-      enum: ['Box', 'Sq Ft', 'Sqm', 'Piece', 'Pallet'],
+      enum: ['Box', 'Sq Ft', 'Sqm', 'Piece', 'Pallet', 'LM'],
       default: 'Box',
     },
     quantityOrdered: {
