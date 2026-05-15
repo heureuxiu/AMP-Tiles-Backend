@@ -391,6 +391,7 @@ function normalizeStockUnit(rawUnit, pricingUnit) {
     return 'sqft';
   }
   if (normalized.includes('piece')) return 'piece';
+  if (normalized === 'lm' || normalized.includes('linearmeter') || normalized.includes('linearmetre')) return 'lm';
   if (normalized.includes('box')) return 'box';
 
   if (pricingUnit === 'per_sqm') return 'sqm';
@@ -420,6 +421,7 @@ function normalizeItemUnitType(rawUnitType) {
     return 'sqft';
   }
   if (normalized.includes('piece')) return 'piece';
+  if (normalized === 'lm' || normalized.includes('linearmeter') || normalized.includes('linearmetre')) return 'lm';
   return 'box';
 }
 
@@ -456,13 +458,16 @@ function getItemCoverageSqm(product, item) {
   if (itemUnit === 'sqft') {
     return hasCoveragePerBox ? quantity * sqmPerBox : quantity / SQFT_PER_SQM;
   }
+  if (itemUnit === 'lm') {
+    return quantity;
+  }
   return null;
 }
 
 function getItemStockDemand(product, item) {
   const quantity = Number(item.quantity) || 0;
   const stockUnit = normalizeStockUnit(product.unit, product.pricingUnit);
-  if (stockUnit === 'box' || stockUnit === 'piece') return quantity;
+  if (stockUnit === 'box' || stockUnit === 'piece' || stockUnit === 'lm') return quantity;
 
   const coverageSqm = getItemCoverageSqm(product, item);
   if (coverageSqm == null) return quantity;
