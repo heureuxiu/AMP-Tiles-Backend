@@ -276,6 +276,7 @@ function normalizePoUnitType(value) {
     return 'sqft';
   }
   if (normalized.includes('piece')) return 'piece';
+  if (normalized === 'lm' || normalized.includes('linearmeter') || normalized.includes('linearmetre')) return 'lm';
   if (normalized.includes('pallet')) return 'pallet';
   return 'box';
 }
@@ -302,6 +303,7 @@ function convertQuantityToSqm({ quantity, unitType, product }) {
   const sqmPerBox = getSqmPerBox(product);
 
   if (normalizedUnit === 'sqm') return roundQty(qty);
+  if (normalizedUnit === 'lm') return roundQty(qty);
   if (normalizedUnit === 'sqft') return roundQty(qty * SQM_PER_SQFT);
 
   if (normalizedUnit === 'box') {
@@ -946,7 +948,7 @@ exports.receivePurchaseOrder = async (req, res) => {
         if (r.batchNumber) item.batchNumber = r.batchNumber;
         item.receivedDate = item.receivedDate || receivedDate;
 
-        // Increase product stock in sqm only (when automatic mode is enabled)
+        // Increase product stock in the product's own stock unit (when automatic mode is enabled)
         if (qtyReceived > 0 && item.product && applyStockUpdate) {
           const product = await Product.findById(item.product._id || item.product);
           if (product) {
@@ -957,7 +959,6 @@ exports.receivePurchaseOrder = async (req, res) => {
             });
             const previousStock = roundQty(Number(product.stock || 0));
             product.stock = roundQty(previousStock + receivedSqm);
-            product.unit = 'sqm';
             await product.save();
             stockUpdateCount += 1;
             receivedSqmTotal = roundQty(receivedSqmTotal + receivedSqm);
@@ -972,13 +973,14 @@ exports.receivePurchaseOrder = async (req, res) => {
 
             const poRef = purchaseOrder.poNumber || purchaseOrder._id.toString();
 
+            const stockUnitLabel = String(product.unit || item.unitType || 'unit');
             await StockTransaction.create({
               product: product._id,
               type: 'stock-in',
               quantity: receivedSqm,
               previousStock,
               newStock: product.stock,
-              remarks: `PO ${poRef} received ${roundQty(receivedSqm)} sqm from ${qtyReceived} ${item.unitType || 'unit'}${r.batchNumber ? ` (Batch: ${r.batchNumber})` : ''}`.trim(),
+              remarks: `PO ${poRef} received ${roundQty(receivedSqm)} ${stockUnitLabel} from ${qtyReceived} ${item.unitType || 'unit'}${r.batchNumber ? ` (Batch: ${r.batchNumber})` : ''}`.trim(),
               sourceType: 'purchase_order',
               sourceId: String(purchaseOrder._id),
               sourceRef: poRef,
