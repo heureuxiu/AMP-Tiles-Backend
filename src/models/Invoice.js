@@ -18,7 +18,7 @@ const invoiceItemSchema = new mongoose.Schema({
   },
   unitType: {
     type: String,
-    enum: ['Box', 'Sq Ft', 'Sq Meter', 'Piece'],
+    enum: ['Box', 'Sq Ft', 'Sq Meter', 'Piece', 'LM'],
     default: 'Box',
   },
   quantity: {
