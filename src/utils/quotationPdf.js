@@ -76,6 +76,16 @@ function getDisplayQuantity(item) {
   return formatQuantity(item?.quantity ?? 0);
 }
 
+function getDisplayUnit(item) {
+  const unitType = String(item?.unitType || '').trim().toLowerCase();
+  if (unitType === 'sqm' || unitType === 'sq meter') return 'sqm';
+  if (unitType === 'sqft' || unitType === 'sq ft') return 'sq ft';
+  if (unitType === 'piece' || unitType === 'pieces' || unitType === 'pcs') return 'pieces';
+  if (unitType === 'lm') return 'LM';
+  if (unitType === 'box') return 'box';
+  return item?.unitType || '';
+}
+
 function getItemSize(item) {
   const rawSize = item?.product?.size ?? item?.size;
   return rawSize ? String(rawSize) : '';
@@ -119,7 +129,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
       <td>${escapeHtml(item.productName || item.product?.name || '')}</td>
       <td>${escapeHtml(getItemSku(item))}</td>
       <td>${escapeHtml(getItemSize(item))}</td>
-      <td>${escapeHtml(item.unitType || '')}</td>
+      <td>${escapeHtml(getDisplayUnit(item))}</td>
       <td class="center">${escapeHtml(getDisplayQuantity(item))}</td>
       <td class="right">${formatNumber(item.rate)}</td>
       <td class="center">${item.taxPercent ? item.taxPercent + '%' : (quote.taxRate ? quote.taxRate + '%' : '10%')}</td>
