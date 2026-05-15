@@ -750,6 +750,7 @@ function normalizeStockUnit(rawUnit, pricingUnit) {
     return 'sqft';
   }
   if (normalized.includes('piece')) return 'piece';
+  if (normalized === 'lm' || normalized.includes('linearmeter') || normalized.includes('linearmetre')) return 'lm';
   if (normalized.includes('box')) return 'box';
 
   if (pricingUnit === 'per_sqm') return 'sqm';
@@ -769,6 +770,7 @@ function normalizeItemUnitType(rawUnitType) {
     return 'sqft';
   }
   if (normalized.includes('piece')) return 'piece';
+  if (normalized === 'lm' || normalized.includes('linearmeter') || normalized.includes('linearmetre')) return 'lm';
   return 'box';
 }
 
@@ -792,6 +794,9 @@ function getItemCoverageSqm(product, item) {
   }
   if (itemUnit === 'piece') {
     return sqmPerPiece > 0 ? quantity * sqmPerPiece : quantity;
+  }
+  if (itemUnit === 'lm') {
+    return quantity;
   }
   return null;
 }
@@ -822,6 +827,9 @@ function getItemStockDemand(product, item) {
     if (sqmPerPiece > 0) return coverageSqm / sqmPerPiece;
     return quantity;
   }
+  if (stockUnit === 'lm') {
+    return quantity;
+  }
 
   return quantity;
 }
@@ -849,7 +857,11 @@ function buildQuotationItem(product, item) {
       ? Number(item.taxPercent)
       : 10;
   const quantitySqm = roundQty(Math.max(0, Number(getItemCoverageSqm(product, item)) || 0));
-  const base = quantitySqm * rate;
+  const normalizedUnit = normalizeItemUnitType(item?.unitType);
+  const itemQuantity = roundQty(Math.max(0, Number(item?.quantity) || quantitySqm));
+  const billableQuantity =
+    normalizedUnit === 'sqm' || normalizedUnit === 'sqft' ? quantitySqm : itemQuantity;
+  const base = billableQuantity * rate;
   const discountAmount = 0;
   const taxAmount = (base * taxPercent) / 100;
   const lineTotal = Math.round((base + taxAmount) * 100) / 100;
@@ -859,13 +871,16 @@ function buildQuotationItem(product, item) {
       product: product._id,
       productName: product.name,
       size: String(product.size ?? item.size ?? ''),
-      unitType: 'Sq Meter',
-      quantity: quantitySqm,
+      unitType: item?.unitType || 'Sq Meter',
+      quantity: itemQuantity,
       rate,
       discountPercent,
       taxPercent,
       lineTotal,
-      coverageSqm: quantitySqm,
+      coverageSqm:
+        String(item?.unitType || '').toLowerCase().includes('sq')
+          ? quantitySqm
+          : undefined,
     },
     base,
     discountAmount,
