@@ -34,6 +34,12 @@ function getItemSize(item) {
   return rawSize ? String(rawSize) : '';
 }
 
+function getDisplayUnit(unitType) {
+  const normalized = String(unitType || '').trim().toLowerCase();
+  if (normalized === 'piece' || normalized === 'pieces' || normalized === 'pcs') return 'Quantity';
+  return String(unitType || '');
+}
+
 function getLogoBase64() {
   return readLogoBase64();
 }
@@ -65,7 +71,7 @@ function buildPurchaseOrderHtml(purchaseOrder, companyInfo = {}) {
       <td>${escapeHtml(item.productName || item.product?.name || '')}</td>
       <td>${escapeHtml(getItemSize(item))}</td>
       <td class="center">${escapeHtml(String(item.quantityOrdered ?? 0))}</td>
-      <td class="center">${escapeHtml(item.unitType || '')}</td>
+      <td class="center">${escapeHtml(getDisplayUnit(item.unitType))}</td>
       <td class="right">${formatNumber(item.rate)}</td>
       <td class="center">${item.taxPercent ? item.taxPercent + '%' : '10%'}</td>
       <td class="right">${formatNumber(item.lineTotal)}</td>
