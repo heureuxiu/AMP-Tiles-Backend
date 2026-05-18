@@ -21,6 +21,7 @@ const app = express();
 const allowedOrigins = [
   process.env.CLIENT_URL, // e.g. https://amp-tiles-dashboard.vercel.app
   "http://localhost:3000",
+  "http://localhost:3001",
 ].filter(Boolean);
 
 app.use(
