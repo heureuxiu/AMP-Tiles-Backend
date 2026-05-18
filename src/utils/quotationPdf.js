@@ -80,7 +80,7 @@ function getDisplayUnit(item) {
   const unitType = String(item?.unitType || '').trim().toLowerCase();
   if (unitType === 'sqm' || unitType === 'sq meter') return 'sqm';
   if (unitType === 'sqft' || unitType === 'sq ft') return 'sq ft';
-  if (unitType === 'piece' || unitType === 'pieces' || unitType === 'pcs') return 'pieces';
+  if (unitType === 'piece' || unitType === 'pieces' || unitType === 'pcs') return 'quantity';
   if (unitType === 'lm') return 'LM';
   if (unitType === 'box') return 'box';
   return item?.unitType || '';
@@ -420,7 +420,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
         <th>SKU</th>
         <th>Size</th>
         <th>Unit</th>
-        <th class="center">Piece</th>
+        <th class="center">Quantity</th>
         <th class="right">Unit Price</th>
         <th class="center">GST</th>
         <th class="right">Amount AUD</th>
