@@ -489,7 +489,7 @@
           <th>SKU</th>
           <th>SIZE</th>
           <th>UNIT</th>
-          <th class="center">PIECE</th>
+          <th class="center">QUANTITY</th>
           <th class="right">RATE</th>
           <th class="center">DISC%</th>
           <th class="center">TAX%</th>
