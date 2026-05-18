@@ -319,7 +319,7 @@ function convertQuantityToSqm({ quantity, unitType, product }) {
     const tilesPerBox = Number(product?.tilesPerBox) || 0;
     if (sqmPerBox <= 0 || tilesPerBox <= 0) {
       throw createStockUnitValidationError(
-        `Cannot convert pieces to sqm for product "${product?.name || ''}". Please set coverage per box and tiles per box.`
+        `Cannot convert quantity to sqm for product "${product?.name || ''}". Please set coverage per box and tiles per box.`
       );
     }
     const sqmPerPiece = sqmPerBox / tilesPerBox;
