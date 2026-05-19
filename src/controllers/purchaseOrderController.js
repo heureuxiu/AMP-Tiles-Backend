@@ -308,9 +308,7 @@ function convertQuantityToSqm({ quantity, unitType, product }) {
 
   if (normalizedUnit === 'box') {
     if (sqmPerBox <= 0) {
-      throw createStockUnitValidationError(
-        `Cannot convert boxes to sqm for product "${product?.name || ''}". Please set coverage per box first.`
-      );
+      return roundQty(qty);
     }
     return roundQty(qty * sqmPerBox);
   }
@@ -318,9 +316,7 @@ function convertQuantityToSqm({ quantity, unitType, product }) {
   if (normalizedUnit === 'piece') {
     const tilesPerBox = Number(product?.tilesPerBox) || 0;
     if (sqmPerBox <= 0 || tilesPerBox <= 0) {
-      throw createStockUnitValidationError(
-        `Cannot convert quantity to sqm for product "${product?.name || ''}". Please set coverage per box and tiles per box.`
-      );
+      return roundQty(qty);
     }
     const sqmPerPiece = sqmPerBox / tilesPerBox;
     return roundQty(qty * sqmPerPiece);
