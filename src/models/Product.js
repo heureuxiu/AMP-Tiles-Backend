@@ -62,8 +62,8 @@ const productSchema = new mongoose.Schema(
     },
     tilesPerBox: {
       type: Number,
-      required: [true, 'Please provide tiles per box'],
       min: 0,
+      default: null,
     },
     coveragePerBox: {
       type: Number,
