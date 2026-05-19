@@ -126,8 +126,8 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
     .map(
       (item) => `
     <tr>
-      <td>${escapeHtml(item.productName || item.product?.name || '')}</td>
       <td>${escapeHtml(getItemSku(item))}</td>
+      <td>${escapeHtml(item.productName || item.product?.name || '')}</td>
       <td>${escapeHtml(getItemSize(item))}</td>
       <td>${escapeHtml(getDisplayUnit(item))}</td>
       <td class="center">${escapeHtml(getDisplayQuantity(item))}</td>
@@ -165,8 +165,8 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
   // Delivery row for the table
   const deliveryRowHtml = deliveryCost > 0 ? `
     <tr>
-      <td>Delivery Cost</td>
       <td></td>
+      <td>Delivery Cost</td>
       <td></td>
       <td></td>
       <td class="center">1</td>
@@ -416,8 +416,8 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
   <table class="items">
     <thead>
       <tr>
-        <th>Description</th>
         <th>SKU</th>
+        <th>Description</th>
         <th>Size</th>
         <th>Unit</th>
         <th class="center">Quantity</th>
@@ -439,13 +439,13 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
         <td class="t-label">Subtotal</td>
         <td class="t-value">${formatNumber(subtotal)}</td>
       </tr>
-      ${discount > 0 ? `<tr><td class="t-label">Discount</td><td class="t-value">-${formatNumber(discount)}</td></tr>` : ''}
-      ${deliveryCost > 0 ? `<tr><td class="t-label">Delivery Cost</td><td class="t-value">${formatNumber(deliveryCost)}</td></tr>` : ''}
-      ${deliveryGst > 0 ? `<tr><td class="t-label">Delivery GST (${DELIVERY_GST_RATE}%)</td><td class="t-value">${formatNumber(deliveryGst)}</td></tr>` : ''}
       <tr>
         <td class="t-label">Items GST</td>
         <td class="t-value">${formatNumber(tax)}</td>
       </tr>
+      ${deliveryCost > 0 ? `<tr><td class="t-label">Delivery Cost</td><td class="t-value">${formatNumber(deliveryCost)}</td></tr>` : ''}
+      ${deliveryGst > 0 ? `<tr><td class="t-label">Delivery GST (${DELIVERY_GST_RATE}%)</td><td class="t-value">${formatNumber(deliveryGst)}</td></tr>` : ''}
+      ${discount > 0 ? `<tr><td class="t-label">Discount</td><td class="t-value">-${formatNumber(discount)}</td></tr>` : ''}
       <tr class="grand-row">
         <td class="t-label">TOTAL AUD</td>
         <td class="t-value">${formatNumber(grandTotal)}</td>
