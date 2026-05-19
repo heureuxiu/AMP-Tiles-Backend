@@ -31,6 +31,7 @@ function toCents(value) {
 }
 
 const DEFAULT_DELIVERY_COST = 0;
+const DELIVERY_GST_RATE = 10;
 const COMPANY_DETAILS = {
   name: 'AMP TILES',
   email: 'accounts@amptiles.com.au',
@@ -48,15 +49,15 @@ function getInvoiceAmountSnapshot(invoice) {
     : Number.isFinite(fallbackDelivery)
       ? fallbackDelivery
       : DEFAULT_DELIVERY_COST;
-  const grandTotal = Number.isFinite(Number(invoice?.grandTotal))
-    ? Number(invoice.grandTotal)
-    : baseTotal + deliveryCost;
+  const deliveryGst = Math.round((deliveryCost * DELIVERY_GST_RATE)) / 100;
+  const grandTotal = baseTotal + deliveryCost + deliveryGst;
 
   return {
     subtotal: Math.round(subtotal * 100) / 100,
     discountAmount: Math.round(discountAmount * 100) / 100,
     taxAmount: Math.round(taxAmount * 100) / 100,
     deliveryCost: Math.round(deliveryCost * 100) / 100,
+    deliveryGst: Math.round(deliveryGst * 100) / 100,
     grandTotal: Math.round(grandTotal * 100) / 100,
   };
 }
@@ -114,6 +115,9 @@ function buildInvoiceEmail(invoice) {
     `Subtotal: ${formatCurrency(payment.amounts.subtotal)}`,
     `Tax (GST): ${formatCurrency(payment.amounts.taxAmount)}`,
     `Delivery Cost: ${formatCurrency(payment.amounts.deliveryCost)}`,
+    payment.amounts.deliveryGst > 0
+      ? `Delivery GST (${DELIVERY_GST_RATE}%): ${formatCurrency(payment.amounts.deliveryGst)}`
+      : '',
     `Grand Total: ${formatCurrency(payment.amounts.grandTotal)}`,
     `Amount Received: ${formatCurrency(payment.paidCents / 100)}`,
     `Outstanding: ${formatCurrency(payment.remainingCents / 100)}`,
@@ -142,6 +146,11 @@ function buildInvoiceEmail(invoice) {
         <strong>Subtotal:</strong> ${escapeHtml(formatCurrency(payment.amounts.subtotal))}<br/>
         <strong>Tax (GST):</strong> ${escapeHtml(formatCurrency(payment.amounts.taxAmount))}<br/>
         <strong>Delivery Cost:</strong> ${escapeHtml(formatCurrency(payment.amounts.deliveryCost))}<br/>
+        ${
+          payment.amounts.deliveryGst > 0
+            ? `<strong>Delivery GST (${DELIVERY_GST_RATE}%):</strong> ${escapeHtml(formatCurrency(payment.amounts.deliveryGst))}<br/>`
+            : ''
+        }
         <strong>Grand Total:</strong> ${escapeHtml(formatCurrency(payment.amounts.grandTotal))}<br/>
         <strong>Amount Received:</strong> ${escapeHtml(formatCurrency(payment.paidCents / 100))}<br/>
         <strong>Outstanding:</strong> ${escapeHtml(formatCurrency(payment.remainingCents / 100))}<br/>
