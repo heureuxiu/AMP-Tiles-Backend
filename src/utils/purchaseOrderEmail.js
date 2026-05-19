@@ -91,7 +91,6 @@ function buildPurchaseOrderEmail(purchaseOrder) {
     'Thank you for your support.',
     '',
     'Kind regards,',
-    'Prabin',
     'AMP Tiles',
   ].join('\n');
 
@@ -102,7 +101,7 @@ function buildPurchaseOrderEmail(purchaseOrder) {
       <p>Could you kindly confirm stock availability for the items listed, along with the estimated delivery date? Your prompt confirmation will help us plan accordingly.</p>
       <p>Please let us know if there are any discrepancies or if further information is required.</p>
       <p>Thank you for your support.</p>
-      <p style="margin-top:24px;">Kind regards,<br/>Prabin<br/>AMP Tiles</p>
+      <p style="margin-top:24px;">Kind regards,<br/>AMP Tiles</p>
     </div>
   `;
 
