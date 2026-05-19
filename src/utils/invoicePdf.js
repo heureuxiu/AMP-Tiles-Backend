@@ -118,8 +118,8 @@
     const rowsHtml = items.map(
       (item) => `
       <tr>
-        <td>${escapeHtml(item.productName)}</td>
         <td>${escapeHtml(getItemSku(item))}</td>
+        <td>${escapeHtml(item.productName)}</td>
         <td>${escapeHtml(getItemSize(item))}</td>
         <td>${escapeHtml(item.unitType || '')}</td>
         <td class="center">${escapeHtml(getDisplayQuantity(item))}</td>
@@ -164,8 +164,8 @@
       .replace(/\b\w/g, (c) => c.toUpperCase());
     const deliveryRowHtml = deliveryCost > 0 ? `
       <tr>
-        <td>Delivery Cost</td>
         <td></td>
+        <td>Delivery Cost</td>
         <td></td>
         <td></td>
         <td class="center">1</td>
@@ -485,8 +485,8 @@
     <table class="items">
       <thead>
         <tr>
-          <th>PRODUCT</th>
           <th>SKU</th>
+          <th>PRODUCT</th>
           <th>SIZE</th>
           <th>UNIT</th>
           <th class="center">QUANTITY</th>
@@ -509,10 +509,10 @@
           <td class="t-label">Subtotal (ex. GST)</td>
           <td class="t-value">${formatNumber(itemsPreTax)}</td>
         </tr>
-        ${discountAmount > 0 ? `<tr><td class="t-label">Discount</td><td class="t-value">-${formatNumber(discountAmount)}</td></tr>` : ''}
         ${itemsGst > 0 ? `<tr><td class="t-label">Items GST (${taxRate}%)</td><td class="t-value">${formatNumber(itemsGst)}</td></tr>` : ''}
         ${deliveryCost > 0 ? `<tr><td class="t-label">Delivery Cost</td><td class="t-value">${formatNumber(deliveryCost)}</td></tr>` : ''}
         ${deliveryGst > 0 ? `<tr><td class="t-label">Delivery GST (${taxRate}%)</td><td class="t-value">${formatNumber(deliveryGst)}</td></tr>` : ''}
+        ${discountAmount > 0 ? `<tr><td class="t-label">Discount</td><td class="t-value">-${formatNumber(discountAmount)}</td></tr>` : ''}
         <tr class="grand-row">
           <td class="t-label">TOTAL AUD</td>
           <td class="t-value">${formatNumber(grandTotal)}</td>
