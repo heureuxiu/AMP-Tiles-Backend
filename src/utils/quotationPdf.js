@@ -417,7 +417,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
     <thead>
       <tr>
         <th>SKU</th>
-        <th>Description</th>
+        <th>Product</th>
         <th>Size</th>
         <th>Unit</th>
         <th class="center">Quantity</th>
