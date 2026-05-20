@@ -128,12 +128,25 @@ function getQuotationItemDetails(item) {
     }
   }
 
+  const displayUnit = (() => {
+    if (!unitType) return 'N/A';
+    if (normalizedUnit.includes('sq meter') || normalizedUnit.includes('sqm') || normalizedUnit.includes('sqmetre')) return 'sqm';
+    if (normalizedUnit.includes('sq ft') || normalizedUnit.includes('sqft') || normalizedUnit.includes('sqfeet')) return 'sq ft';
+    if (
+      normalizedUnit.includes('piece') ||
+      normalizedUnit.includes('pcs') ||
+      normalizedUnit.includes('quantity')
+    ) return 'pieces';
+    if (normalizedUnit === 'lm' || normalizedUnit.includes('linearmeter') || normalizedUnit.includes('linearmetre')) return 'lm';
+    return unitType;
+  })();
+
   return {
     productName,
     sku: skuRaw ? String(skuRaw) : 'N/A',
     description: descriptionRaw ? String(descriptionRaw) : 'N/A',
     size: sizeRaw ? String(sizeRaw) : 'N/A',
-    unit: unitType || 'N/A',
+    unit: displayUnit,
     quantity: displayQuantity,
     rate: Number(item?.rate) || 0,
     amount: Number(item?.lineTotal) || 0,
