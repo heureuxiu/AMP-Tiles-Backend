@@ -80,8 +80,8 @@ function getDisplayUnit(item) {
   const unitType = String(item?.unitType || '').trim().toLowerCase();
   if (unitType === 'sqm' || unitType === 'sq meter') return 'sqm';
   if (unitType === 'sqft' || unitType === 'sq ft') return 'sq ft';
-  if (unitType === 'piece' || unitType === 'pieces' || unitType === 'pcs') return 'quantity';
-  if (unitType === 'lm') return 'LM';
+  if (unitType === 'piece' || unitType === 'pieces' || unitType === 'pcs' || unitType === 'quantity') return 'pieces';
+  if (unitType === 'lm') return 'lm';
   if (unitType === 'box') return 'box';
   return item?.unitType || '';
 }
