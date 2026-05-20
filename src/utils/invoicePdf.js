@@ -82,6 +82,12 @@
     return rawSku ? String(rawSku) : '';
   }
 
+  function getDisplayUnit(item) {
+    const unitType = String(item?.unitType || '').trim().toLowerCase();
+    if (unitType === 'sqm' || unitType === 'sq meter') return 'sqm';
+    return item?.unitType || '';
+  }
+
   function getDeliveryAddress(source) {
     return String(source?.deliveryAddress || source?.customerAddress || '').trim();
   }
@@ -121,7 +127,7 @@
         <td>${escapeHtml(getItemSku(item))}</td>
         <td>${escapeHtml(item.productName)}</td>
         <td>${escapeHtml(getItemSize(item))}</td>
-        <td>${escapeHtml(item.unitType || '')}</td>
+        <td>${escapeHtml(getDisplayUnit(item))}</td>
         <td class="center">${escapeHtml(getDisplayQuantity(item))}</td>
         <td class="right">${formatNumber(item.rate)}</td>
         <td class="center">${item.discountPercent != null && item.discountPercent > 0 ? item.discountPercent + '%' : '-'}</td>
