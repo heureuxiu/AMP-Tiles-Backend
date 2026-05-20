@@ -64,36 +64,23 @@ function getDeliveryAddress(source) {
 
 function buildQuotationEmail(quotation) {
   const quoteNo = quotation.quotationNumber || String(quotation._id || '');
-  const customerName = quotation.customerName || 'Customer';
   const deliveryAddress = getDeliveryAddress(quotation);
   const quoteDate = formatDate(quotation.quotationDate);
   const validUntil = quotation.validUntil ? formatDate(quotation.validUntil) : 'N/A';
   const amounts = getQuotationAmountSnapshot(quotation);
   const grandTotal = formatCurrency(amounts.grandTotal);
-  const notes = String(quotation.notes || '').trim();
-  const terms = String(quotation.terms || '').trim();
 
   const text = [
-    `Dear ${customerName},`,
+    'Dear Customer,',
     '',
     'Thank you for the opportunity to provide a quotation for your project.',
     '',
-    'Please find a summary of your attached quotation details below.',
+    'Please find summary of your attached quotation details below.',
     '',
     `Quotation Date: ${quoteDate}`,
     `Valid Until: ${validUntil}`,
     `Delivery Address: ${deliveryAddress || 'N/A'}`,
-    `Subtotal: ${formatCurrency(amounts.subtotal)}`,
-    amounts.discount > 0 ? `Discount: -${formatCurrency(amounts.discount)}` : '',
-    amounts.tax > 0 ? `Tax (GST): ${formatCurrency(amounts.tax)}` : '',
-    `Delivery Cost: ${formatCurrency(amounts.deliveryCost)}`,
-    amounts.deliveryGst > 0
-      ? `Delivery GST (${DELIVERY_GST_RATE}%): ${formatCurrency(amounts.deliveryGst)}`
-      : '',
     `Grand Total: ${grandTotal}`,
-    '',
-    notes ? `Notes: ${notes}` : '',
-    terms ? `Terms: ${terms}` : '',
     '',
     'From your attached quote you can accept or decline by replying to this email.',
     '',
@@ -108,42 +95,15 @@ function buildQuotationEmail(quotation) {
 
   const html = `
     <div style="font-family: Arial, sans-serif; color: #111827; line-height: 1.4;">
-      <p>Dear ${escapeHtml(customerName)},</p>
+      <p>Dear Customer,</p>
       <p>Thank you for the opportunity to provide a quotation for your project.</p>
-      <p>Please find a summary of your attached quotation details below.</p>
+      <p>Please find summary of your attached quotation details below.</p>
       <p>
         <strong>Quotation Date:</strong> ${escapeHtml(quoteDate)}<br/>
         <strong>Valid Until:</strong> ${escapeHtml(validUntil)}<br/>
         <strong>Delivery Address:</strong> ${escapeHtml(deliveryAddress || 'N/A')}<br/>
-        <strong>Subtotal:</strong> ${escapeHtml(formatCurrency(amounts.subtotal))}<br/>
-        ${
-          amounts.discount > 0
-            ? `<strong>Discount:</strong> -${escapeHtml(formatCurrency(amounts.discount))}<br/>`
-            : ''
-        }
-        ${
-          amounts.tax > 0
-            ? `<strong>Tax (GST):</strong> ${escapeHtml(formatCurrency(amounts.tax))}<br/>`
-            : ''
-        }
-        <strong>Delivery Cost:</strong> ${escapeHtml(formatCurrency(amounts.deliveryCost))}<br/>
-        ${
-          amounts.deliveryGst > 0
-            ? `<strong>Delivery GST (${DELIVERY_GST_RATE}%):</strong> ${escapeHtml(formatCurrency(amounts.deliveryGst))}<br/>`
-            : ''
-        }
         <strong>Grand Total:</strong> ${escapeHtml(grandTotal)}
       </p>
-      ${
-        notes
-          ? `<p><strong>Notes:</strong> ${escapeHtml(notes)}</p>`
-          : ''
-      }
-      ${
-        terms
-          ? `<p><strong>Terms:</strong> ${escapeHtml(terms)}</p>`
-          : ''
-      }
       <p>From your attached quote you can accept or decline by replying to this email.</p>
       <p>Please do not hesitate to contact us if you have any questions.</p>
       <p style="margin-top:24px;">
