@@ -35,8 +35,6 @@ function getItemSize(item) {
 }
 
 function getDisplayUnit(unitType) {
-  const normalized = String(unitType || '').trim().toLowerCase();
-  if (normalized === 'piece' || normalized === 'pieces' || normalized === 'pcs') return 'Quantity';
   return String(unitType || '');
 }
 
