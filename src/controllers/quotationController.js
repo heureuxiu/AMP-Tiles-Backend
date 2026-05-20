@@ -142,164 +142,54 @@ function getQuotationItemDetails(item) {
 
 function buildFallbackQuotationEmail(quotation) {
   const quoteNo = quotation.quotationNumber || String(quotation._id || '');
-  const customerName = quotation.customerName || 'Customer';
   const deliveryAddress = getDeliveryAddress(quotation);
   const quoteDate = formatDate(quotation.quotationDate);
   const validUntil = quotation.validUntil ? formatDate(quotation.validUntil) : 'N/A';
   const amounts = getQuotationAmountSnapshot(quotation);
   const grandTotal = formatCurrency(amounts.grandTotal);
 
-  const rowsHtml = (quotation.items || [])
-    .map((item) => {
-      const details = getQuotationItemDetails(item);
-      return `<tr>
-        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.productName)}</td>
-        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.sku)}</td>
-        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.description)}</td>
-        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.size)}</td>
-        <td style="padding:8px;border:1px solid #ddd;">${escapeHtml(details.unit)}</td>
-        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${details.quantity}</td>
-        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${formatCurrency(details.rate)}</td>
-        <td style="padding:8px;border:1px solid #ddd;text-align:right;">${formatCurrency(details.amount)}</td>
-      </tr>`;
-    })
-    .join('');
-  const totalsRowsHtml = [
-    `<tr>
-      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Subtotal</td>
-      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${escapeHtml(formatCurrency(amounts.subtotal))}</td>
-    </tr>`,
-    amounts.discount > 0
-      ? `<tr>
-          <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Discount</td>
-          <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">-${escapeHtml(formatCurrency(amounts.discount))}</td>
-        </tr>`
-      : '',
-    `<tr>
-      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Tax (GST)</td>
-      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${escapeHtml(formatCurrency(amounts.tax))}</td>
-    </tr>`,
-    `<tr>
-      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Delivery Cost</td>
-      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${escapeHtml(formatCurrency(amounts.deliveryCost))}</td>
-    </tr>`,
-    amounts.deliveryGst > 0
-      ? `<tr>
-          <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">Delivery GST (${DELIVERY_GST_RATE}%)</td>
-          <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:600;">${escapeHtml(formatCurrency(amounts.deliveryGst))}</td>
-        </tr>`
-      : '',
-    `<tr>
-      <td colspan="7" style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:700;">Grand Total</td>
-      <td style="padding:8px;border:1px solid #ddd;text-align:right;font-weight:700;">${escapeHtml(grandTotal)}</td>
-    </tr>`,
-  ]
-    .filter(Boolean)
-    .join('');
-
-  const notesLine = quotation.notes ? `\nNotes: ${quotation.notes}` : '';
-  const termsLine = quotation.terms ? `\nTerms: ${quotation.terms}` : '';
-
   const text = [
-    `Quotation ${quoteNo}`,
-    `Dear ${customerName},`,
+    'Dear Customer,',
     '',
-    'Please find your quotation details below.',
+    'Thank you for the opportunity to provide a quotation for your project.',
+    '',
+    'Please find summary of your attached quotation details below.',
     '',
     `Quotation Date: ${quoteDate}`,
     `Valid Until: ${validUntil}`,
-    deliveryAddress ? `Delivery Address: ${deliveryAddress}` : '',
-    `Subtotal: ${formatCurrency(amounts.subtotal)}`,
-    amounts.discount > 0 ? `Discount: -${formatCurrency(amounts.discount)}` : '',
-    amounts.tax > 0 ? `Tax (GST): ${formatCurrency(amounts.tax)}` : '',
-    `Delivery Cost: ${formatCurrency(amounts.deliveryCost)}`,
-    amounts.deliveryGst > 0
-      ? `Delivery GST (${DELIVERY_GST_RATE}%): ${formatCurrency(amounts.deliveryGst)}`
-      : '',
+    `Delivery Address: ${deliveryAddress || 'N/A'}`,
     `Grand Total: ${grandTotal}`,
     '',
-    'Items:',
-    ...(quotation.items || []).map((item) => {
-      const details = getQuotationItemDetails(item);
-      return `- ${details.productName} | SKU: ${details.sku} | Desc: ${details.description} | Size: ${details.size} | Unit: ${details.unit} | Qty: ${details.quantity} | Rate: ${formatCurrency(details.rate)} | Amount: ${formatCurrency(details.amount)}`;
-    }),
+    'From your attached quote you can accept or decline by replying to this email.',
     '',
-    'Please see attached quotation PDF for your records.',
-    notesLine,
-    termsLine,
+    'Please do not hesitate to contact us if you have any questions.',
     '',
     'Thank you,',
-    COMPANY_NAME,
+    'AMP TILES',
+    'Email:sales@amptiles.com.au',
   ]
     .filter(Boolean)
     .join('\n');
 
   const html = `
     <div style="font-family: Arial, sans-serif; color: #111827; line-height: 1.4;">
-      <h2 style="margin:0 0 16px;">Quotation ${escapeHtml(quoteNo)}</h2>
-      <p>Dear ${escapeHtml(customerName)},</p>
-      <p>Please find your quotation details below.</p>
+      <p>Dear Customer,</p>
+      <p>Thank you for the opportunity to provide a quotation for your project.</p>
+      <p>Please find summary of your attached quotation details below.</p>
       <p>
         <strong>Quotation Date:</strong> ${escapeHtml(quoteDate)}<br/>
         <strong>Valid Until:</strong> ${escapeHtml(validUntil)}<br/>
-        ${
-          deliveryAddress
-            ? `<strong>Delivery Address:</strong> ${escapeHtml(deliveryAddress)}<br/>`
-            : ''
-        }
-        <strong>Subtotal:</strong> ${escapeHtml(formatCurrency(amounts.subtotal))}<br/>
-        ${
-          amounts.discount > 0
-            ? `<strong>Discount:</strong> -${escapeHtml(formatCurrency(amounts.discount))}<br/>`
-            : ''
-        }
-        ${
-          amounts.tax > 0
-            ? `<strong>Tax (GST):</strong> ${escapeHtml(formatCurrency(amounts.tax))}<br/>`
-            : ''
-        }
-        <strong>Delivery Cost:</strong> ${escapeHtml(formatCurrency(amounts.deliveryCost))}<br/>
-        ${
-          amounts.deliveryGst > 0
-            ? `<strong>Delivery GST (${DELIVERY_GST_RATE}%):</strong> ${escapeHtml(formatCurrency(amounts.deliveryGst))}<br/>`
-            : ''
-        }
+        <strong>Delivery Address:</strong> ${escapeHtml(deliveryAddress || 'N/A')}<br/>
         <strong>Grand Total:</strong> ${escapeHtml(grandTotal)}
       </p>
-
-      <table style="width:100%;border-collapse:collapse;margin:16px 0;">
-        <thead>
-          <tr>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Product</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left;">SKU</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Description</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Size</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Unit</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:right;">Qty</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:right;">Rate</th>
-            <th style="padding:8px;border:1px solid #ddd;text-align:right;">Amount</th>
-          </tr>
-        </thead>
-        <tbody>${rowsHtml}${totalsRowsHtml}</tbody>
-      </table>
-
-      ${
-        quotation.notes
-          ? `<p><strong>Notes:</strong> ${escapeHtml(quotation.notes)}</p>`
-          : ''
-      }
-      ${
-        quotation.terms
-          ? `<p><strong>Terms:</strong> ${escapeHtml(quotation.terms)}</p>`
-          : ''
-      }
-
-      <p style="margin-top:24px;">Thank you,<br/>${COMPANY_NAME}</p>
+      <p>From your attached quote you can accept or decline by replying to this email.</p>
+      <p>Please do not hesitate to contact us if you have any questions.</p>
+      <p style="margin-top:24px;">Thank you,<br/>AMP TILES<br/>Email:sales@amptiles.com.au</p>
     </div>
   `;
 
   return {
-    subject: `Quotation ${quoteNo} from ${COMPANY_NAME}`,
+    subject: `Quotation ${quoteNo} from AMP TILES`,
     text,
     html,
   };
