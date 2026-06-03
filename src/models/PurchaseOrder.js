@@ -54,7 +54,7 @@ const purchaseOrderSchema = new mongoose.Schema(
     supplier: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Supplier',
-      required: [true, 'Please provide a supplier'],
+      default: null,
     },
     supplierName: { type: String, required: true },
     poDate: {
