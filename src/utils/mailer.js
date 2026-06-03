@@ -8,7 +8,7 @@ function toBool(value) {
 
 function getSmtpConfig() {
   const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT || 587);
+  const port = Number(process.env.SMTP_PORT || 465);
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
 
@@ -19,24 +19,28 @@ function getSmtpConfig() {
     pass,
     secure: toBool(process.env.SMTP_SECURE),
     fromEmail: process.env.SMTP_FROM_EMAIL || user,
-    fromName: process.env.SMTP_FROM_NAME || 'AMP TILES PTY LTD',
-    replyTo: process.env.SMTP_REPLY_TO || undefined,
-    family: Number(process.env.SMTP_FAMILY || 4),
-    connectionTimeout: Number(process.env.SMTP_CONNECTION_TIMEOUT || 20000),
-    greetingTimeout: Number(process.env.SMTP_GREETING_TIMEOUT || 15000),
-    socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT || 30000),
+    fromName: process.env.SMTP_FROM_NAME || 'AMP Tiles',
+    replyTo: process.env.SMTP_REPLY_TO || user,
   };
 }
 
 function isMailerConfigured() {
   const cfg = getSmtpConfig();
-  return Boolean(cfg.host && cfg.port && cfg.user && cfg.pass && cfg.fromEmail);
+
+  return Boolean(
+    cfg.host &&
+    cfg.port &&
+    cfg.user &&
+    cfg.pass &&
+    cfg.fromEmail
+  );
 }
 
 function getTransporter() {
   if (cachedTransporter) return cachedTransporter;
 
   const cfg = getSmtpConfig();
+
   if (!isMailerConfigured()) {
     throw new Error(
       'Email service is not configured. Please set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and SMTP_FROM_EMAIL.'
@@ -46,44 +50,72 @@ function getTransporter() {
   cachedTransporter = nodemailer.createTransport({
     host: cfg.host,
     port: cfg.port,
-    secure: cfg.secure,
-    family: cfg.family,
-    connectionTimeout: cfg.connectionTimeout,
-    greetingTimeout: cfg.greetingTimeout,
-    socketTimeout: cfg.socketTimeout,
+    secure: cfg.secure, // true for 465, false for 587
     auth: {
       user: cfg.user,
       pass: cfg.pass,
     },
-    tls: {
-      servername: cfg.host,
-    },
+    connectionTimeout: 30000,
+    greetingTimeout: 30000,
+    socketTimeout: 30000,
+    logger: true,
+    debug: true,
   });
 
   return cachedTransporter;
 }
 
-async function sendEmail({ to, cc, subject, text, html, attachments }) {
+async function verifyMailer() {
+  const transporter = getTransporter();
+
+  try {
+    await transporter.verify();
+    console.log('SMTP server is ready to send emails');
+    return true;
+  } catch (error) {
+    console.error('SMTP verification failed:', {
+      message: error.message,
+      code: error.code,
+      command: error.command,
+    });
+
+    throw error;
+  }
+}
+
+async function sendEmail({ to, subject, text, html }) {
   const cfg = getSmtpConfig();
   const transporter = getTransporter();
 
   const fromValue = cfg.fromName
-    ? `${cfg.fromName} <${cfg.fromEmail}>`
+    ? `"${cfg.fromName}" <${cfg.fromEmail}>`
     : cfg.fromEmail;
 
-  return transporter.sendMail({
-    from: fromValue,
-    to,
-    cc,
-    subject,
-    text,
-    html,
-    replyTo: cfg.replyTo,
-    attachments: Array.isArray(attachments) && attachments.length > 0 ? attachments : undefined,
-  });
+  try {
+    const info = await transporter.sendMail({
+      from: fromValue,
+      to,
+      subject,
+      text,
+      html,
+      replyTo: cfg.replyTo,
+    });
+
+    console.log('Email sent successfully:', info.messageId);
+    return info;
+  } catch (error) {
+    console.error('Email sending failed:', {
+      message: error.message,
+      code: error.code,
+      command: error.command,
+    });
+
+    throw error;
+  }
 }
 
 module.exports = {
   isMailerConfigured,
+  verifyMailer,
   sendEmail,
 };
