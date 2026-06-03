@@ -150,7 +150,9 @@
     const deliveryCost = Math.max(0, Number(inv.deliveryCost) || 0);
     const deliveryGst = Math.round(deliveryCost * (taxRate / 100) * 100) / 100;
     const deliveryTotal = Math.round((deliveryCost + deliveryGst) * 100) / 100;
-    const grandTotal = Math.round((itemsPreTax - discountAmount + itemsGst + deliveryCost + deliveryGst) * 100) / 100;
+    const subtotal = Math.round((itemsPreTax - discountAmount + deliveryCost) * 100) / 100;
+    const totalGst = Math.round((itemsGst + deliveryGst) * 100) / 100;
+    const grandTotal = Math.round((subtotal + totalGst) * 100) / 100;
 
     const grandTotalCents = Math.max(0, toCents(grandTotal));
     const paidCents = Math.max(0, Math.min(grandTotalCents, toCents(inv.amountPaid)));
@@ -513,12 +515,12 @@
       <table class="totals-table">
         <tr>
           <td class="t-label">Subtotal (ex. GST)</td>
-          <td class="t-value">${formatNumber(itemsPreTax)}</td>
+          <td class="t-value">${formatNumber(subtotal)}</td>
         </tr>
-        ${itemsGst > 0 ? `<tr><td class="t-label">Items GST (${taxRate}%)</td><td class="t-value">${formatNumber(itemsGst)}</td></tr>` : ''}
-        ${deliveryCost > 0 ? `<tr><td class="t-label">Delivery Cost</td><td class="t-value">${formatNumber(deliveryCost)}</td></tr>` : ''}
-        ${deliveryGst > 0 ? `<tr><td class="t-label">Delivery GST (${taxRate}%)</td><td class="t-value">${formatNumber(deliveryGst)}</td></tr>` : ''}
-        ${discountAmount > 0 ? `<tr><td class="t-label">Discount</td><td class="t-value">-${formatNumber(discountAmount)}</td></tr>` : ''}
+        <tr>
+          <td class="t-label">Total GST</td>
+          <td class="t-value">${formatNumber(totalGst)}</td>
+        </tr>
         <tr class="grand-row">
           <td class="t-label">TOTAL AUD</td>
           <td class="t-value">${formatNumber(grandTotal)}</td>
