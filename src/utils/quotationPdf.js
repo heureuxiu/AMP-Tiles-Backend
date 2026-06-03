@@ -132,16 +132,32 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
       <td>${escapeHtml(getDisplayUnit(item))}</td>
       <td class="center">${escapeHtml(getDisplayQuantity(item))}</td>
       <td class="right">${formatNumber(item.rate)}</td>
-      <td class="center">${item.taxPercent ? item.taxPercent + '%' : (quote.taxRate ? quote.taxRate + '%' : '10%')}</td>
+      <td class="center">${item.discountPercent != null && item.discountPercent > 0 ? item.discountPercent + '%' : '-'}</td>
+      <td class="center">${item.taxPercent != null ? item.taxPercent + '%' : (quote.taxRate != null ? quote.taxRate + '%' : '10%')}</td>
       <td class="right">${formatNumber(item.lineTotal)}</td>
     </tr>`
     )
     .join('');
 
-  const subtotal = quote.subtotal ?? (quote.items || []).reduce((s, i) => s + (i.lineTotal || 0), 0);
-  const discount = quote.discount ?? 0;
-  const tax = quote.tax ?? 0;
-  const baseTotal = subtotal - discount + tax;
+  const items = quote.items || [];
+  const taxRate = quote.taxRate || 10;
+  const itemsPreTax = Math.round(items.reduce((sum, item) => {
+    const taxPercent = Number(item.taxPercent ?? taxRate);
+    const lineTotal = Number(item.lineTotal || 0);
+    return sum + (lineTotal / (1 + taxPercent / 100));
+  }, 0) * 100) / 100;
+  const itemsGst = Math.round(items.reduce((sum, item) => {
+    const taxPercent = Number(item.taxPercent ?? taxRate);
+    const lineTotal = Number(item.lineTotal || 0);
+    return sum + (lineTotal - lineTotal / (1 + taxPercent / 100));
+  }, 0) * 100) / 100;
+  const storedSubtotal = Number(quote.subtotal) || 0;
+  const storedDiscount = Number(quote.discount) || 0;
+  const storedTax = Number(quote.tax) || 0;
+  const fallbackItemsPreTax = Math.max(0, Math.round((storedSubtotal - storedDiscount) * 100) / 100);
+  const effectiveItemsPreTax = items.length > 0 ? itemsPreTax : fallbackItemsPreTax;
+  const effectiveItemsGst = items.length > 0 ? itemsGst : storedTax;
+  const baseTotal = fallbackItemsPreTax + storedTax;
   const parsedDeliveryCost = Number(quote.deliveryCost);
   const fallbackDeliveryCost = Math.max(
     0,
@@ -153,11 +169,12 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
       ? normalizeDeliveryCost(fallbackDeliveryCost)
       : 0;
   const deliveryGst = calculateDeliveryGst(deliveryCost);
+  const subtotal = Math.round((effectiveItemsPreTax + deliveryCost) * 100) / 100;
+  const totalGst = Math.round((effectiveItemsGst + deliveryGst) * 100) / 100;
   const grandTotal = Number.isFinite(Number(quote.grandTotal))
     ? Number(quote.grandTotal)
-    : Math.round((baseTotal + deliveryCost + deliveryGst) * 100) / 100;
+    : Math.round((subtotal + totalGst) * 100) / 100;
 
-  const taxRate = quote.taxRate || 10;
   const validUntil = quote.validUntil ? formatDate(quote.validUntil) : 'N/A';
   const statusLabel = String(quote.status || 'draft').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   const referenceLabel = String(quote.reference || '').trim();
@@ -171,6 +188,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
       <td></td>
       <td class="center">1</td>
       <td class="right">${formatNumber(deliveryCost)}</td>
+      <td class="center">-</td>
       <td class="center">${DELIVERY_GST_RATE}%</td>
       <td class="right">${formatNumber(deliveryCost + deliveryGst)}</td>
     </tr>` : '';
@@ -422,7 +440,8 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
         <th>Unit</th>
         <th class="center">Quantity</th>
         <th class="right">Unit Price</th>
-        <th class="center">GST</th>
+        <th class="center">Disc%</th>
+        <th class="center">Tax%</th>
         <th class="right">Amount AUD</th>
       </tr>
     </thead>
@@ -436,16 +455,13 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
   <div class="totals-wrapper">
     <table class="totals-table">
       <tr>
-        <td class="t-label">Subtotal</td>
+        <td class="t-label">Subtotal (ex. GST)</td>
         <td class="t-value">${formatNumber(subtotal)}</td>
       </tr>
       <tr>
-        <td class="t-label">Items GST</td>
-        <td class="t-value">${formatNumber(tax)}</td>
+        <td class="t-label">Total GST</td>
+        <td class="t-value">${formatNumber(totalGst)}</td>
       </tr>
-      ${deliveryCost > 0 ? `<tr><td class="t-label">Delivery Cost</td><td class="t-value">${formatNumber(deliveryCost)}</td></tr>` : ''}
-      ${deliveryGst > 0 ? `<tr><td class="t-label">Delivery GST (${DELIVERY_GST_RATE}%)</td><td class="t-value">${formatNumber(deliveryGst)}</td></tr>` : ''}
-      ${discount > 0 ? `<tr><td class="t-label">Discount</td><td class="t-value">-${formatNumber(discount)}</td></tr>` : ''}
       <tr class="grand-row">
         <td class="t-label">TOTAL AUD</td>
         <td class="t-value">${formatNumber(grandTotal)}</td>
