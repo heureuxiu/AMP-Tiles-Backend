@@ -754,7 +754,10 @@ function formatStockQty(value) {
 // Helper to build one quotation item with canonical sqm quantity and configurable tax
 function buildQuotationItem(product, item) {
   const rate = resolveQuotationRatePerSqm(product, item);
-  const discountPercent = 0;
+  const parsedDiscountPercent = Number(item?.discountPercent);
+  const discountPercent = Number.isFinite(parsedDiscountPercent)
+    ? Math.min(100, Math.max(0, parsedDiscountPercent))
+    : 0;
   const taxPercent =
     item.taxPercent != null && item.taxPercent !== ''
       ? Number(item.taxPercent)
@@ -765,9 +768,10 @@ function buildQuotationItem(product, item) {
   const billableQuantity =
     normalizedUnit === 'sqm' || normalizedUnit === 'sqft' ? quantitySqm : itemQuantity;
   const base = billableQuantity * rate;
-  const discountAmount = 0;
-  const taxAmount = (base * taxPercent) / 100;
-  const lineTotal = Math.round((base + taxAmount) * 100) / 100;
+  const discountAmount = (base * discountPercent) / 100;
+  const discountedBase = Math.max(0, base - discountAmount);
+  const taxAmount = (discountedBase * taxPercent) / 100;
+  const lineTotal = Math.round((discountedBase + taxAmount) * 100) / 100;
 
   return {
     populated: {
@@ -1160,6 +1164,7 @@ exports.updateQuotation = async (req, res) => {
       customerName,
       customerPhone,
       customerEmail,
+      customerCcEmails,
       customerAddress,
       deliveryAddress,
       reference,
