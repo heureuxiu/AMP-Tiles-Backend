@@ -63,7 +63,7 @@ async function resolveSupplierDocument({ supplierId, supplierName, fallbackSuppl
 // @access  Private
 exports.getProducts = async (req, res) => {
   try {
-    const { search, category, finish, status, supplierName, supplier } = req.query;
+    const { search, category, finish, status, supplierName, supplier, supplierType } = req.query;
 
     const conditions = [];
 
@@ -86,6 +86,10 @@ exports.getProducts = async (req, res) => {
     // Filter by finish
     if (finish) {
       conditions.push({ finish });
+    }
+
+    if (supplierType && supplierType !== 'all') {
+      conditions.push({ supplierType });
     }
 
     // Filter by supplier id (preferred), with backward-compatible supplierName fallback
