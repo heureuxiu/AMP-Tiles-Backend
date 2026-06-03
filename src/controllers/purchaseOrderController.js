@@ -534,7 +534,7 @@ exports.createPurchaseOrder = async (req, res) => {
     if (!supplier && !isOwnProductsPo) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide a supplier or select Own Products',
+        message: 'Please provide a supplier or select AMP Products',
       });
     }
 
@@ -571,7 +571,7 @@ exports.createPurchaseOrder = async (req, res) => {
       if (isOwnProductsPo && String(product.supplierType || 'own') !== 'own') {
         return res.status(400).json({
           success: false,
-          message: `Product "${product.name}" is not an own product`,
+          message: `Product "${product.name}" is not an AMP product`,
         });
       }
       if (!isOwnProductsPo && !isProductLinkedToSupplier(product, supplierDoc)) {
@@ -598,7 +598,7 @@ exports.createPurchaseOrder = async (req, res) => {
 
     const createPayload = {
       supplier: isOwnProductsPo ? null : supplier,
-      supplierName: isOwnProductsPo ? 'Own Products' : supplierDoc.name,
+      supplierName: isOwnProductsPo ? 'AMP Products' : supplierDoc.name,
       poDate: poDate || Date.now(),
       expectedDeliveryDate: expectedDeliveryDate || null,
       warehouseLocation: warehouseLocation || '',
@@ -691,7 +691,8 @@ exports.updatePurchaseOrder = async (req, res) => {
     } = req.body;
 
     const isCurrentOwnProductsPo =
-      !purchaseOrder.supplier && normalizeText(purchaseOrder.supplierName) === 'own products';
+      !purchaseOrder.supplier &&
+      ['own products', 'amp products'].includes(normalizeText(purchaseOrder.supplierName));
     const isOwnProductsPo =
       isOwnProductsSelection(supplier, supplierType) ||
       (!supplier && isCurrentOwnProductsPo);
@@ -699,7 +700,7 @@ exports.updatePurchaseOrder = async (req, res) => {
     let effectiveSupplierDoc = null;
     if (isOwnProductsSelection(supplier, supplierType)) {
       purchaseOrder.supplier = null;
-      purchaseOrder.supplierName = 'Own Products';
+      purchaseOrder.supplierName = 'AMP Products';
     } else if (supplier && supplier !== String(purchaseOrder.supplier || '')) {
       const supplierDoc = await Supplier.findById(supplier);
       if (!supplierDoc) {
@@ -759,7 +760,7 @@ exports.updatePurchaseOrder = async (req, res) => {
         if (isOwnProductsPo && String(product.supplierType || 'own') !== 'own') {
           return res.status(400).json({
             success: false,
-            message: `Product "${product.name}" is not an own product`,
+            message: `Product "${product.name}" is not an AMP product`,
           });
         }
         if (!isOwnProductsPo && !isProductLinkedToSupplier(product, effectiveSupplierDoc)) {
