@@ -244,6 +244,14 @@ function isProductLinkedToSupplier(product, supplierDoc) {
   return normalizeText(product.supplierName) === normalizeText(supplierDoc.name);
 }
 
+function isOwnProductsSelection(value, supplierType) {
+  return (
+    String(value || '').trim() === '__own_products__' ||
+    String(value || '').trim().toLowerCase() === 'own' ||
+    String(supplierType || '').trim().toLowerCase() === 'own'
+  );
+}
+
 function resolveProductCostRate(product) {
   const raw = Number(product?.costPrice);
   if (!Number.isFinite(raw) || raw < 0) return null;
@@ -509,6 +517,7 @@ exports.createPurchaseOrder = async (req, res) => {
   try {
     const {
       supplier,
+      supplierType,
       poDate,
       expectedDeliveryDate,
       warehouseLocation,
@@ -520,10 +529,12 @@ exports.createPurchaseOrder = async (req, res) => {
       terms,
     } = req.body;
 
-    if (!supplier) {
+    const isOwnProductsPo = isOwnProductsSelection(supplier, supplierType);
+
+    if (!supplier && !isOwnProductsPo) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide a supplier',
+        message: 'Please provide a supplier or select Own Products',
       });
     }
 
@@ -534,8 +545,8 @@ exports.createPurchaseOrder = async (req, res) => {
       });
     }
 
-    const supplierDoc = await Supplier.findById(supplier);
-    if (!supplierDoc) {
+    const supplierDoc = isOwnProductsPo ? null : await Supplier.findById(supplier);
+    if (!isOwnProductsPo && !supplierDoc) {
       return res.status(404).json({
         success: false,
         message: 'Supplier not found',
@@ -550,20 +561,32 @@ exports.createPurchaseOrder = async (req, res) => {
           message: 'Each item must have product and quantityOrdered',
         });
       }
-      const product = await Product.findById(item.product).select('name sku size supplier supplierName coveragePerBox coveragePerBoxUnit tilesPerBox costPrice');
+      const product = await Product.findById(item.product).select('name sku size supplier supplierType supplierName coveragePerBox coveragePerBoxUnit tilesPerBox costPrice');
       if (!product) {
         return res.status(404).json({
           success: false,
           message: `Product with ID ${item.product} not found`,
         });
       }
-      if (!isProductLinkedToSupplier(product, supplierDoc)) {
+      if (isOwnProductsPo && String(product.supplierType || 'own') !== 'own') {
+        return res.status(400).json({
+          success: false,
+          message: `Product "${product.name}" is not an own product`,
+        });
+      }
+      if (!isOwnProductsPo && !isProductLinkedToSupplier(product, supplierDoc)) {
         return res.status(400).json({
           success: false,
           message: `Product "${product.name}" is not linked to selected supplier "${supplierDoc.name}"`,
         });
       }
-      const costRate = resolveProductCostRate(product);
+      const productCostRate = resolveProductCostRate(product);
+      const parsedItemRate = Number(item.rate);
+      const costRate = isOwnProductsPo && productCostRate == null
+        ? Number.isFinite(parsedItemRate) && parsedItemRate >= 0
+          ? parsedItemRate
+          : null
+        : productCostRate;
       if (costRate == null) {
         return res.status(400).json({
           success: false,
@@ -574,8 +597,8 @@ exports.createPurchaseOrder = async (req, res) => {
     }
 
     const createPayload = {
-      supplier,
-      supplierName: supplierDoc.name,
+      supplier: isOwnProductsPo ? null : supplier,
+      supplierName: isOwnProductsPo ? 'Own Products' : supplierDoc.name,
       poDate: poDate || Date.now(),
       expectedDeliveryDate: expectedDeliveryDate || null,
       warehouseLocation: warehouseLocation || '',
@@ -654,6 +677,7 @@ exports.updatePurchaseOrder = async (req, res) => {
 
     const {
       supplier,
+      supplierType,
       poDate,
       expectedDeliveryDate,
       warehouseLocation,
@@ -666,8 +690,17 @@ exports.updatePurchaseOrder = async (req, res) => {
       status,
     } = req.body;
 
+    const isCurrentOwnProductsPo =
+      !purchaseOrder.supplier && normalizeText(purchaseOrder.supplierName) === 'own products';
+    const isOwnProductsPo =
+      isOwnProductsSelection(supplier, supplierType) ||
+      (!supplier && isCurrentOwnProductsPo);
+
     let effectiveSupplierDoc = null;
-    if (supplier && supplier !== purchaseOrder.supplier.toString()) {
+    if (isOwnProductsSelection(supplier, supplierType)) {
+      purchaseOrder.supplier = null;
+      purchaseOrder.supplierName = 'Own Products';
+    } else if (supplier && supplier !== String(purchaseOrder.supplier || '')) {
       const supplierDoc = await Supplier.findById(supplier);
       if (!supplierDoc) {
         return res.status(404).json({
@@ -678,7 +711,7 @@ exports.updatePurchaseOrder = async (req, res) => {
       purchaseOrder.supplier = supplier;
       purchaseOrder.supplierName = supplierDoc.name;
       effectiveSupplierDoc = supplierDoc;
-    } else {
+    } else if (!isOwnProductsPo && (items && items.length > 0)) {
       effectiveSupplierDoc = await Supplier.findById(purchaseOrder.supplier).select('_id name');
       if (!effectiveSupplierDoc) {
         return res.status(404).json({
@@ -716,20 +749,32 @@ exports.updatePurchaseOrder = async (req, res) => {
             message: 'Each item must have product and quantityOrdered',
           });
         }
-        const product = await Product.findById(item.product).select('name sku size supplier supplierName coveragePerBox coveragePerBoxUnit tilesPerBox costPrice');
+        const product = await Product.findById(item.product).select('name sku size supplier supplierType supplierName coveragePerBox coveragePerBoxUnit tilesPerBox costPrice');
         if (!product) {
           return res.status(404).json({
             success: false,
             message: `Product with ID ${item.product} not found`,
           });
         }
-        if (!isProductLinkedToSupplier(product, effectiveSupplierDoc)) {
+        if (isOwnProductsPo && String(product.supplierType || 'own') !== 'own') {
+          return res.status(400).json({
+            success: false,
+            message: `Product "${product.name}" is not an own product`,
+          });
+        }
+        if (!isOwnProductsPo && !isProductLinkedToSupplier(product, effectiveSupplierDoc)) {
           return res.status(400).json({
             success: false,
             message: `Product "${product.name}" is not linked to selected supplier "${effectiveSupplierDoc.name}"`,
           });
         }
-        const costRate = resolveProductCostRate(product);
+        const productCostRate = resolveProductCostRate(product);
+        const parsedItemRate = Number(item.rate);
+        const costRate = isOwnProductsPo && productCostRate == null
+          ? Number.isFinite(parsedItemRate) && parsedItemRate >= 0
+            ? parsedItemRate
+            : null
+          : productCostRate;
         if (costRate == null) {
           return res.status(400).json({
             success: false,
