@@ -319,9 +319,9 @@ async function sendQuotationEmailWithAttachment(quotationDoc, options = {}) {
     html: emailPayload.html,
     attachments: [
       {
-        filename: `quotation-${quoteRef}.pdf`,
-        content: pdfBuffer,
-        contentType: 'application/pdf',
+         filename: `quotation-${quoteRef}.pdf`,
+         content: pdfBuffer.toString('base64'),
+         contentType: 'application/pdf',
       },
     ],
   });
