@@ -1,129 +1,150 @@
-const nodemailer = require('nodemailer');
+const axios = require('axios');
 
-let cachedTransporter = null;
-
-function toBool(value) {
-  return String(value || '').toLowerCase() === 'true';
-}
-
-function resolveSecure(port) {
-  if (process.env.SMTP_SECURE !== undefined) {
-    return toBool(process.env.SMTP_SECURE);
-  }
-
-  return Number(port) === 465;
-}
-
-function getSmtpConfig() {
-  const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT || 465);
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-
+function getEmailConfig() {
   return {
-    host,
-    port,
-    user,
-    pass,
-    secure: resolveSecure(port),
-    fromEmail: process.env.SMTP_FROM_EMAIL || user,
+    provider: process.env.EMAIL_PROVIDER || 'brevo',
+    apiKey: process.env.BREVO_API_KEY,
+
+    fromEmail: process.env.SMTP_FROM_EMAIL || 'info@devforc.com',
     fromName: process.env.SMTP_FROM_NAME || 'AMP Tiles',
-    replyTo: process.env.SMTP_REPLY_TO || user,
+    replyTo: process.env.SMTP_REPLY_TO || process.env.SMTP_FROM_EMAIL || 'info@devforc.com',
   };
 }
 
 function isMailerConfigured() {
-  const cfg = getSmtpConfig();
+  const cfg = getEmailConfig();
 
   return Boolean(
-    cfg.host &&
-    cfg.port &&
-    cfg.user &&
-    cfg.pass &&
+    cfg.provider === 'brevo' &&
+    cfg.apiKey &&
     cfg.fromEmail
   );
 }
 
-function getTransporter() {
-  if (cachedTransporter) return cachedTransporter;
-
-  const cfg = getSmtpConfig();
-
+async function verifyMailer() {
   if (!isMailerConfigured()) {
     throw new Error(
-      'Email service is not configured. Please set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and SMTP_FROM_EMAIL.'
+      'Brevo email service is not configured. Please set EMAIL_PROVIDER=brevo, BREVO_API_KEY, and SMTP_FROM_EMAIL.'
     );
   }
 
-  cachedTransporter = nodemailer.createTransport({
-    host: cfg.host,
-    port: cfg.port,
-    secure: cfg.secure, // true for 465, false for 587
-    auth: {
-      user: cfg.user,
-      pass: cfg.pass,
-    },
-    connectionTimeout: 30000,
-    greetingTimeout: 30000,
-    socketTimeout: 30000,
-    logger: true,
-    debug: true,
-  });
-
-  return cachedTransporter;
+  console.log('Brevo email service is configured');
+  return true;
 }
 
-async function verifyMailer() {
-  const transporter = getTransporter();
+function normalizeRecipients(value) {
+  if (!value) return undefined;
 
-  try {
-    await transporter.verify();
-    console.log('SMTP server is ready to send emails');
-    return true;
-  } catch (error) {
-    console.error('SMTP verification failed:', {
-      message: error.message,
-      code: error.code,
-      command: error.command,
-    });
-
-    throw error;
+  if (Array.isArray(value)) {
+    return value
+      .filter(Boolean)
+      .map((item) => {
+        if (typeof item === 'string') return { email: item };
+        return item;
+      });
   }
+
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map((email) => email.trim())
+      .filter(Boolean)
+      .map((email) => ({ email }));
+  }
+
+  return undefined;
 }
 
-async function sendEmail({ to, cc, bcc, subject, text, html, attachments, replyTo }) {
-  const cfg = getSmtpConfig();
-  const transporter = getTransporter();
+function normalizeAttachments(attachments) {
+  if (!Array.isArray(attachments) || attachments.length === 0) {
+    return undefined;
+  }
 
-  const fromValue = cfg.fromName
-    ? `"${cfg.fromName}" <${cfg.fromEmail}>`
-    : cfg.fromEmail;
+  return attachments.map((file) => {
+    if (!file) return null;
 
-  const mailOptions = {
-    from: fromValue,
-    to,
-    cc,
-    bcc,
+    return {
+      name: file.filename || file.name,
+      content: file.content,
+    };
+  }).filter(Boolean);
+}
+
+async function sendEmail({
+  to,
+  cc,
+  bcc,
+  subject,
+  text,
+  html,
+  attachments,
+  replyTo,
+}) {
+  const cfg = getEmailConfig();
+
+  if (!isMailerConfigured()) {
+    throw new Error(
+      'Brevo email service is not configured. Please set BREVO_API_KEY and SMTP_FROM_EMAIL.'
+    );
+  }
+
+  const toRecipients = normalizeRecipients(to);
+
+  if (!toRecipients || toRecipients.length === 0) {
+    throw new Error('Email recipient "to" is required.');
+  }
+
+  if (!subject) {
+    throw new Error('Email subject is required.');
+  }
+
+  if (!html && !text) {
+    throw new Error('Email html or text content is required.');
+  }
+
+  const payload = {
+    sender: {
+      name: cfg.fromName,
+      email: cfg.fromEmail,
+    },
+    to: toRecipients,
     subject,
-    text,
-    html,
-    replyTo: replyTo || cfg.replyTo,
+    replyTo: {
+      email: replyTo || cfg.replyTo,
+    },
   };
 
-  if (Array.isArray(attachments) && attachments.length > 0) {
-    mailOptions.attachments = attachments;
-  }
+  const ccRecipients = normalizeRecipients(cc);
+  const bccRecipients = normalizeRecipients(bcc);
+  const normalizedAttachments = normalizeAttachments(attachments);
+
+  if (ccRecipients?.length) payload.cc = ccRecipients;
+  if (bccRecipients?.length) payload.bcc = bccRecipients;
+  if (html) payload.htmlContent = html;
+  if (text) payload.textContent = text;
+  if (normalizedAttachments?.length) payload.attachment = normalizedAttachments;
 
   try {
-    const info = await transporter.sendMail(mailOptions);
+    const response = await axios.post(
+      'https://api.brevo.com/v3/smtp/email',
+      payload,
+      {
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+          'api-key': cfg.apiKey,
+        },
+        timeout: 30000,
+      }
+    );
 
-    console.log('Email sent successfully:', info.messageId);
-    return info;
+    console.log('Email sent successfully via Brevo:', response.data);
+    return response.data;
   } catch (error) {
-    console.error('Email sending failed:', {
+    console.error('Brevo email sending failed:', {
+      status: error.response?.status,
+      data: error.response?.data,
       message: error.message,
-      code: error.code,
-      command: error.command,
     });
 
     throw error;
