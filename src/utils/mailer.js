@@ -83,7 +83,7 @@ async function verifyMailer() {
   }
 }
 
-async function sendEmail({ to, subject, text, html }) {
+async function sendEmail({ to, cc, bcc, subject, text, html, attachments, replyTo }) {
   const cfg = getSmtpConfig();
   const transporter = getTransporter();
 
@@ -91,15 +91,23 @@ async function sendEmail({ to, subject, text, html }) {
     ? `"${cfg.fromName}" <${cfg.fromEmail}>`
     : cfg.fromEmail;
 
+  const mailOptions = {
+    from: fromValue,
+    to,
+    cc,
+    bcc,
+    subject,
+    text,
+    html,
+    replyTo: replyTo || cfg.replyTo,
+  };
+
+  if (Array.isArray(attachments) && attachments.length > 0) {
+    mailOptions.attachments = attachments;
+  }
+
   try {
-    const info = await transporter.sendMail({
-      from: fromValue,
-      to,
-      subject,
-      text,
-      html,
-      replyTo: cfg.replyTo,
-    });
+    const info = await transporter.sendMail(mailOptions);
 
     console.log('Email sent successfully:', info.messageId);
     return info;
