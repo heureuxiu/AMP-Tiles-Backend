@@ -6,6 +6,14 @@ function toBool(value) {
   return String(value || '').toLowerCase() === 'true';
 }
 
+function resolveSecure(port) {
+  if (process.env.SMTP_SECURE !== undefined) {
+    return toBool(process.env.SMTP_SECURE);
+  }
+
+  return Number(port) === 465;
+}
+
 function getSmtpConfig() {
   const host = process.env.SMTP_HOST;
   const port = Number(process.env.SMTP_PORT || 465);
@@ -17,7 +25,7 @@ function getSmtpConfig() {
     port,
     user,
     pass,
-    secure: toBool(process.env.SMTP_SECURE),
+    secure: resolveSecure(port),
     fromEmail: process.env.SMTP_FROM_EMAIL || user,
     fromName: process.env.SMTP_FROM_NAME || 'AMP Tiles',
     replyTo: process.env.SMTP_REPLY_TO || user,
