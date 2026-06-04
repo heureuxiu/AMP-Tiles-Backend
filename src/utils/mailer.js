@@ -27,11 +27,11 @@ function isMailerConfigured() {
 async function verifyMailer() {
   if (!isMailerConfigured()) {
     throw new Error(
-      'Brevo email service is not configured. Please set EMAIL_PROVIDER=brevo, BREVO_API_KEY and SMTP_FROM_EMAIL.'
+      'Brevo email service is not configured. Please set EMAIL_PROVIDER=brevo, BREVO_API_KEY, and SMTP_FROM_EMAIL.'
     );
   }
 
-  console.log('Brevo email service is configured.');
+  console.log('Brevo email service is configured');
   return true;
 }
 
@@ -43,11 +43,12 @@ function normalizeRecipients(value) {
       .filter(Boolean)
       .map((item) => {
         if (typeof item === 'string') {
-          return { email: item };
+          return { email: item.trim() };
         }
 
         return item;
-      });
+      })
+      .filter((item) => item.email);
   }
 
   if (typeof value === 'string') {
@@ -55,9 +56,7 @@ function normalizeRecipients(value) {
       .split(',')
       .map((email) => email.trim())
       .filter(Boolean)
-      .map((email) => ({
-        email,
-      }));
+      .map((email) => ({ email }));
   }
 
   return undefined;
@@ -72,9 +71,19 @@ function normalizeAttachments(attachments) {
     .map((file) => {
       if (!file) return null;
 
+      let content;
+
+      if (Buffer.isBuffer(file.content)) {
+        content = file.content.toString('base64');
+      } else if (typeof file.content === 'string') {
+        content = file.content;
+      } else {
+        return null;
+      }
+
       return {
-        name: file.filename || file.name,
-        content: file.content,
+        name: file.filename || file.name || 'attachment.pdf',
+        content,
       };
     })
     .filter(Boolean);
@@ -94,14 +103,22 @@ async function sendEmail({
 
   if (!isMailerConfigured()) {
     throw new Error(
-      'Brevo email service is not configured.'
+      'Brevo email service is not configured. Please set BREVO_API_KEY and SMTP_FROM_EMAIL.'
     );
   }
 
   const toRecipients = normalizeRecipients(to);
 
   if (!toRecipients || toRecipients.length === 0) {
-    throw new Error('Recipient email is required.');
+    throw new Error('Email recipient "to" is required.');
+  }
+
+  if (!subject) {
+    throw new Error('Email subject is required.');
+  }
+
+  if (!html && !text) {
+    throw new Error('Email html or text content is required.');
   }
 
   const payload = {
@@ -109,39 +126,21 @@ async function sendEmail({
       name: cfg.fromName,
       email: cfg.fromEmail,
     },
-
     to: toRecipients,
-
     subject,
-
     replyTo: {
       email: replyTo || cfg.replyTo,
     },
   };
 
-  if (text) {
-    payload.textContent = text;
-  }
-
-  if (html) {
-    payload.htmlContent = html;
-  }
-
   const ccRecipients = normalizeRecipients(cc);
-
-  if (ccRecipients?.length) {
-    payload.cc = ccRecipients;
-  }
-
   const bccRecipients = normalizeRecipients(bcc);
+  const normalizedAttachments = normalizeAttachments(attachments);
 
-  if (bccRecipients?.length) {
-    payload.bcc = bccRecipients;
-  }
-
-  const normalizedAttachments =
-    normalizeAttachments(attachments);
-
+  if (ccRecipients?.length) payload.cc = ccRecipients;
+  if (bccRecipients?.length) payload.bcc = bccRecipients;
+  if (html) payload.htmlContent = html;
+  if (text) payload.textContent = text;
   if (normalizedAttachments?.length) {
     payload.attachment = normalizedAttachments;
   }
@@ -160,21 +159,16 @@ async function sendEmail({
       }
     );
 
-    console.log(
-      'Email sent successfully via Brevo:',
-      response.data
-    );
-
+    console.log('Email sent successfully via Brevo:', response.data);
     return response.data;
   } catch (error) {
     const brevoError = error.response?.data;
 
-    console.error('==============================');
-    console.error('BREVO ERROR');
-    console.error('Status:', error.response?.status);
-    console.error('Response:', brevoError);
-    console.error('Message:', error.message);
-    console.error('==============================');
+    console.error('Brevo email sending failed:', {
+      status: error.response?.status,
+      data: brevoError,
+      message: error.message,
+    });
 
     throw new Error(
       brevoError?.message ||
