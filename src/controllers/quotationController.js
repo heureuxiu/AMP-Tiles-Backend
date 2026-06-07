@@ -1,7 +1,9 @@
 const mongoose = require('mongoose');
+const crypto = require('crypto');
 const Quotation = require('../models/Quotation');
 const Product = require('../models/Product');
 const Invoice = require('../models/Invoice');
+const StockTransaction = require('../models/StockTransaction');
 const { generateQuotationPdf } = require('../utils/quotationPdf');
 
 function escapeHtml(value) {
@@ -285,7 +287,130 @@ function summarizeEmailError(error, fallbackMessage = 'Failed to send quotation 
     .join(' | ');
 }
 
+function generateResponseToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+async function ensureQuotationResponseToken(quotationDoc) {
+  if (!quotationDoc?.save) return quotationDoc;
+  if (!quotationDoc.responseToken) {
+    quotationDoc.responseToken = generateResponseToken();
+    await quotationDoc.save();
+  }
+  return quotationDoc;
+}
+
+function getClientBaseUrl(req) {
+  const configuredUrl =
+    process.env.CLIENT_URL ||
+    process.env.NEXT_PUBLIC_CLIENT_URL ||
+    process.env.FRONTEND_URL ||
+    (process.env.NODE_ENV === 'production'
+      ? 'https://amp-tiles-dashbaord.vercel.app'
+      : 'http://localhost:3000');
+
+  return String(configuredUrl).replace(/\/+$/, '');
+}
+
+function buildQuotationResponseUrl(token, req) {
+  if (!token) return '';
+  return `${getClientBaseUrl(req)}/quotation-response/${encodeURIComponent(token)}`;
+}
+
+function appendQuotationResponseLink(emailPayload, responseUrl) {
+  if (!responseUrl) return emailPayload;
+
+  const textBlock = [
+    '',
+    'Review and respond to this quotation:',
+    responseUrl,
+    '',
+    'Please use this secure link to accept or reject the quotation and add your remarks.',
+  ].join('\n');
+
+  const htmlBlock = `
+    <div style="margin:24px 0; padding:16px; border:1px solid #d1d5db; border-radius:8px; background:#f9fafb;">
+      <p style="margin:0 0 12px; font-weight:600;">Review and respond to this quotation</p>
+      <a href="${escapeHtml(responseUrl)}" style="display:inline-block; padding:10px 16px; background:#111827; color:#ffffff; text-decoration:none; border-radius:6px; font-weight:600;">
+        Accept or Reject Quotation
+      </a>
+      <p style="margin:12px 0 0; color:#4b5563; font-size:13px;">Use this secure link to add your decision and remarks.</p>
+    </div>
+  `;
+
+  return {
+    ...emailPayload,
+    text: `${emailPayload.text || ''}${textBlock}`,
+    html: emailPayload.html
+      ? emailPayload.html.replace('</div>', `${htmlBlock}</div>`)
+      : htmlBlock,
+  };
+}
+
+function buildQuotationResponseNotificationEmail(quotation, decision, remarks) {
+  const quoteNo = quotation.quotationNumber || String(quotation._id || '');
+  const decisionLabel = decision === 'accepted' ? 'Accepted' : 'Rejected';
+  const safeRemarks = String(remarks || '').trim() || 'No remarks provided.';
+
+  return {
+    subject: `Quotation ${quoteNo} ${decisionLabel} by ${quotation.customerName}`,
+    text: [
+      `Quotation ${quoteNo} was ${decisionLabel.toLowerCase()} by the client.`,
+      '',
+      `Customer: ${quotation.customerName}`,
+      `Email: ${quotation.customerEmail || 'N/A'}`,
+      `Grand Total: ${formatCurrency(quotation.grandTotal)}`,
+      `Responded At: ${formatDate(quotation.clientRespondedAt || new Date())}`,
+      '',
+      'Remarks:',
+      safeRemarks,
+    ].join('\n'),
+    html: `
+      <div style="font-family: Arial, sans-serif; color:#111827; line-height:1.5;">
+        <h2 style="margin:0 0 12px;">Quotation ${escapeHtml(quoteNo)} ${escapeHtml(decisionLabel)}</h2>
+        <p>The client has ${escapeHtml(decisionLabel.toLowerCase())} this quotation.</p>
+        <p>
+          <strong>Customer:</strong> ${escapeHtml(quotation.customerName)}<br/>
+          <strong>Email:</strong> ${escapeHtml(quotation.customerEmail || 'N/A')}<br/>
+          <strong>Grand Total:</strong> ${escapeHtml(formatCurrency(quotation.grandTotal))}<br/>
+          <strong>Responded At:</strong> ${escapeHtml(formatDate(quotation.clientRespondedAt || new Date()))}
+        </p>
+        <p><strong>Remarks:</strong></p>
+        <p style="white-space:pre-wrap; padding:12px; border:1px solid #d1d5db; border-radius:8px; background:#f9fafb;">${escapeHtml(safeRemarks)}</p>
+      </div>
+    `,
+  };
+}
+
+async function notifyQuotationResponse(quotation, decision, remarks) {
+  const recipients = parseEmailList([
+    process.env.QUOTATION_RESPONSE_NOTIFY_EMAIL,
+    process.env.SMTP_REPLY_TO,
+    process.env.SMTP_FROM_EMAIL,
+    quotation.createdBy?.email,
+  ]);
+
+  if (recipients.length === 0) return { sent: false, error: 'No notification recipient configured' };
+
+  const emailPayload = buildQuotationResponseNotificationEmail(quotation, decision, remarks);
+
+  try {
+    await sendEmail({
+      to: recipients[0],
+      cc: recipients.slice(1).join(', ') || undefined,
+      subject: emailPayload.subject,
+      text: emailPayload.text,
+      html: emailPayload.html,
+    });
+    return { sent: true, error: null };
+  } catch (error) {
+    console.error('Quotation response notification email failed:', error);
+    return { sent: false, error: summarizeEmailError(error, 'Failed to send response notification email') };
+  }
+}
+
 async function sendQuotationEmailWithAttachment(quotationDoc, options = {}) {
+  await ensureQuotationResponseToken(quotationDoc);
   const quotation = quotationDoc?.toObject ? quotationDoc.toObject() : quotationDoc;
   if (!quotation) {
     const error = new Error('Quotation not found');
@@ -305,7 +430,10 @@ async function sendQuotationEmailWithAttachment(quotationDoc, options = {}) {
   const ccEmails = parseEmailList(options.ccEmails);
 
   const pdfBuffer = await generateQuotationPdf(quotation);
-  const emailPayload = buildQuotationEmail(quotation);
+  const emailPayload = appendQuotationResponseLink(
+    buildQuotationEmail(quotation),
+    buildQuotationResponseUrl(quotation.responseToken, options.req)
+  );
   const quoteRef = String(quotation.quotationNumber || quotation._id || 'quotation').replace(
     /\s/g,
     '-'
@@ -433,6 +561,128 @@ exports.getQuotation = async (req, res) => {
   }
 };
 
+// @desc    Get quotation by public response token
+// @route   GET /api/quotations/respond/:token
+// @access  Public
+exports.getQuotationForResponse = async (req, res) => {
+  try {
+    const token = String(req.params.token || '').trim();
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Response token is required',
+      });
+    }
+
+    const quotation = await Quotation.findOne({ responseToken: token })
+      .select(
+        'quotationNumber customerName customerEmail customerPhone customerAddress deliveryAddress quotationDate validUntil items subtotal discount discountType tax taxRate deliveryCost grandTotal status clientResponseRemarks clientRespondedAt'
+      )
+      .populate('items.product', 'name sku description size');
+
+    if (!quotation) {
+      return res.status(404).json({
+        success: false,
+        message: 'Quotation response link is invalid or expired',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      quotation,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// @desc    Accept or reject quotation by public response token
+// @route   POST /api/quotations/respond/:token
+// @access  Public
+exports.respondToQuotation = async (req, res) => {
+  try {
+    const token = String(req.params.token || '').trim();
+    const decision = String(req.body?.decision || '').trim().toLowerCase();
+    const remarks = String(req.body?.remarks || '').trim();
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Response token is required',
+      });
+    }
+
+    if (!['accepted', 'rejected'].includes(decision)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Decision must be accepted or rejected',
+      });
+    }
+
+    if (!remarks) {
+      return res.status(400).json({
+        success: false,
+        message: 'Remarks are required',
+      });
+    }
+
+    const quotation = await Quotation.findOne({ responseToken: token })
+      .populate('createdBy', 'name email')
+      .populate('items.product', 'name sku description size');
+
+    if (!quotation) {
+      return res.status(404).json({
+        success: false,
+        message: 'Quotation response link is invalid or expired',
+      });
+    }
+
+    if (quotation.status === 'converted') {
+      return res.status(400).json({
+        success: false,
+        message: 'This quotation has already been converted to an invoice',
+      });
+    }
+
+    if (quotation.status === 'cancelled' || quotation.status === 'expired') {
+      return res.status(400).json({
+        success: false,
+        message: `This quotation is ${quotation.status} and can no longer be responded to`,
+      });
+    }
+
+    if (['accepted', 'rejected'].includes(quotation.status) && quotation.clientRespondedAt) {
+      return res.status(400).json({
+        success: false,
+        message: `This quotation has already been ${quotation.status}`,
+      });
+    }
+
+    quotation.status = decision;
+    quotation.clientResponseRemarks = remarks;
+    quotation.clientRespondedAt = new Date();
+    quotation.clientResponseEmail = quotation.customerEmail || undefined;
+    await quotation.save();
+
+    const notification = await notifyQuotationResponse(quotation, decision, remarks);
+
+    res.status(200).json({
+      success: true,
+      message: `Quotation ${decision}`,
+      quotation,
+      notification,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 // @desc    Send quotation to customer email and mark as sent
 // @route   POST /api/quotations/:id/send
 // @access  Private
@@ -474,6 +724,7 @@ exports.sendQuotationEmail = async (req, res) => {
 
     const ccEmails = parseEmailList(quotation.customerCcEmails || []);
     await sendQuotationEmailWithAttachment(quotation, {
+      req,
       toEmail: customerEmail,
       ccEmails,
     });
@@ -928,6 +1179,7 @@ async function validateStockAndLoadProducts(items, options = {}) {
 }
 
 async function consumeOwnStockForItems(items, options = {}) {
+  const { actorId, invoiceId, invoiceRef } = options;
   const productIds = [];
   for (const item of items) {
     const productId = getProductIdFromItem(item);
@@ -961,11 +1213,28 @@ async function consumeOwnStockForItems(items, options = {}) {
 
   for (const [productId, quantity] of requestedByProduct.entries()) {
     const product = productMap.get(productId);
-    if (!product || !isOwnStockProduct(product)) continue;
-    const nextStock = roundQty((Number(product.stock) || 0) - quantity);
-    product.stock = Math.max(0, nextStock);
+    if (!product) continue;
+    const previousStock = roundQty(Number(product.stock) || 0);
+    const nextStock = Math.max(0, roundQty(previousStock - quantity));
+    product.stock = nextStock;
     // eslint-disable-next-line no-await-in-loop
     await product.save();
+    // Log stock transaction for audit trail
+    if (actorId) {
+      // eslint-disable-next-line no-await-in-loop
+      await StockTransaction.create({
+        product: product._id,
+        type: 'stock-out',
+        quantity,
+        previousStock,
+        newStock: nextStock,
+        remarks: `Invoice${invoiceRef ? ` ${invoiceRef}` : ''} – converted from quotation`,
+        sourceType: 'invoice',
+        sourceId: String(invoiceId || ''),
+        sourceRef: String(invoiceRef || ''),
+        createdBy: actorId,
+      });
+    }
   }
 }
 
@@ -1081,6 +1350,7 @@ exports.createQuotation = async (req, res) => {
     if (shouldSendEmail) {
       try {
         await sendQuotationEmailWithAttachment(quotation, {
+          req,
           toEmail: primaryEmail,
           ccEmails,
         });
@@ -1378,8 +1648,9 @@ exports.convertToInvoice = async (req, res) => {
       coverageSqm: item.coverageSqm,
     }));
 
-    // Reduce only own stock and ignore this quotation's own reservation while converting.
-    await consumeOwnStockForItems(invoiceItems, { excludeQuotationId: quotation._id });
+    // Validate stock availability before creating the invoice
+    // (excludes this quotation's own hold so conversion is always possible)
+    await validateStockAndLoadProducts(invoiceItems, { excludeQuotationId: quotation._id });
 
     // Create actual Invoice from quotation data
     const invoice = await Invoice.create({
@@ -1406,6 +1677,14 @@ exports.convertToInvoice = async (req, res) => {
       terms: quotation.terms,
       status: 'confirmed',
       createdBy: req.user.id,
+    });
+
+    // Deduct stock for ALL tracked products and log StockTransaction records
+    await consumeOwnStockForItems(invoiceItems, {
+      excludeQuotationId: quotation._id,
+      actorId: req.user.id,
+      invoiceId: invoice._id,
+      invoiceRef: invoice.invoiceNumber || String(invoice._id),
     });
 
     // Mark quotation as converted and link to invoice
@@ -1436,6 +1715,37 @@ exports.convertToInvoice = async (req, res) => {
 // @desc    Get quotation statistics
 // @route   GET /api/quotations/stats/summary
 // @access  Private
+// @desc    Get held stock quantities for given product IDs (from active quotations)
+// @route   GET /api/quotations/held-stock
+// @access  Private
+exports.getHeldStock = async (req, res) => {
+  try {
+    const { productIds, excludeQuotationId } = req.query;
+
+    let ids = [];
+    if (typeof productIds === 'string') {
+      ids = productIds.split(',').filter(Boolean);
+    } else if (Array.isArray(productIds)) {
+      ids = productIds.filter(Boolean);
+    }
+
+    if (ids.length === 0) {
+      return res.status(200).json({ success: true, heldStock: {} });
+    }
+
+    const heldByProduct = await getHeldQuantitiesByProduct(ids, { excludeQuotationId });
+
+    const heldStock = {};
+    for (const [productId, qty] of heldByProduct.entries()) {
+      heldStock[productId] = qty;
+    }
+
+    return res.status(200).json({ success: true, heldStock });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.getQuotationStats = async (req, res) => {
   try {
     const totalQuotations = await Quotation.countDocuments();

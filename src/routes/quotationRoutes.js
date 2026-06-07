@@ -23,12 +23,24 @@ const updateQuotation = safeHandler(quotationController.updateQuotation, 'update
 const deleteQuotation = safeHandler(quotationController.deleteQuotation, 'deleteQuotation');
 const convertToInvoice = safeHandler(quotationController.convertToInvoice, 'convertToInvoice');
 const getQuotationStats = safeHandler(quotationController.getQuotationStats, 'getQuotationStats');
+const getQuotationForResponse = safeHandler(quotationController.getQuotationForResponse, 'getQuotationForResponse');
+const respondToQuotation = safeHandler(quotationController.respondToQuotation, 'respondToQuotation');
+const getHeldStock = safeHandler(quotationController.getHeldStock, 'getHeldStock');
+
+// Public customer response routes
+router
+  .route('/respond/:token')
+  .get(getQuotationForResponse)
+  .post(respondToQuotation);
 
 // All routes are protected
 router.use(protect);
 
 // Statistics route
 router.get('/stats/summary', getQuotationStats);
+
+// Held stock route (must be before /:id)
+router.get('/held-stock', getHeldStock);
 
 // Main CRUD routes
 router.route('/').get(getQuotations).post(createQuotation);

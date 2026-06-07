@@ -23,6 +23,165 @@ function exactCaseInsensitiveRegex(value) {
   return new RegExp(`^${escapeRegex(String(value || '').trim())}$`, 'i');
 }
 
+function parseCsvLine(line) {
+  const values = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    const nextChar = line[index + 1];
+
+    if (char === '"' && inQuotes && nextChar === '"') {
+      current += '"';
+      index += 1;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === ',' && !inQuotes) {
+      values.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+
+  values.push(current.trim());
+  return values;
+}
+
+function parseCsv(csvText) {
+  const normalizedText = String(csvText || '').replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const lines = normalizedText
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length < 2) {
+    return { rows: [], error: 'CSV must include a header row and at least one product row' };
+  }
+
+  const headers = parseCsvLine(lines[0]).map((header) =>
+    header.toLowerCase().replace(/[^a-z0-9]/g, '')
+  );
+
+  const rows = lines.slice(1).map((line, index) => {
+    const values = parseCsvLine(line);
+    const row = {};
+    headers.forEach((header, headerIndex) => {
+      row[header] = values[headerIndex] !== undefined ? values[headerIndex] : '';
+    });
+    return { rowNumber: index + 2, row };
+  });
+
+  return { rows };
+}
+
+function csvValue(row, aliases) {
+  for (const alias of aliases) {
+    const key = alias.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (row[key] !== undefined && String(row[key]).trim() !== '') {
+      return String(row[key]).trim();
+    }
+  }
+  return '';
+}
+
+function csvNumber(row, aliases, { required = false, min = 0 } = {}) {
+  const value = csvValue(row, aliases);
+  if (!value) {
+    if (required) return { error: `${aliases[0]} is required` };
+    return { value: undefined };
+  }
+
+  const numberValue = Number(value.replace(/,/g, ''));
+  if (!Number.isFinite(numberValue)) {
+    return { error: `${aliases[0]} must be a valid number` };
+  }
+  if (numberValue < min) {
+    return { error: `${aliases[0]} must be ${min} or greater` };
+  }
+
+  return { value: numberValue };
+}
+
+function buildProductPayloadFromCsv(row) {
+  const requiredTextFields = [
+    ['name', ['name', 'productName', 'product']],
+    ['sku', ['sku', 'code', 'productCode']],
+    ['category', ['category']],
+    ['finish', ['finish']],
+    ['size', ['size']],
+    ['boxCoveragePackingDetails', ['boxCoveragePackingDetails', 'packingDetails', 'boxPacking', 'packing']],
+  ];
+
+  const payload = {};
+  const errors = [];
+
+  requiredTextFields.forEach(([field, aliases]) => {
+    const value = csvValue(row, aliases);
+    if (!value) errors.push(`${aliases[0]} is required`);
+    payload[field] = value;
+  });
+
+  payload.description = csvValue(row, ['description']);
+  payload.supplierType = csvValue(row, ['supplierType', 'supplier type']) || 'own';
+  payload.supplierType = payload.supplierType.toLowerCase();
+  if (!['own', 'third-party'].includes(payload.supplierType)) {
+    errors.push('supplierType must be own or third-party');
+  }
+  payload.supplierName = csvValue(row, ['supplierName', 'supplier', 'supplier name']);
+
+  const unit = csvValue(row, ['unit']) || 'sqm';
+  payload.unit = unit;
+  payload.pricingUnit = csvValue(row, ['pricingUnit', 'pricing unit']) || unitToPricingUnit(unit);
+  if (!['per_box', 'per_sqft', 'per_sqm', 'per_piece'].includes(payload.pricingUnit)) {
+    errors.push('pricingUnit must be per_box, per_sqft, per_sqm, or per_piece');
+  }
+
+  payload.coveragePerBoxUnit = csvValue(row, ['coveragePerBoxUnit', 'coverage unit']) || 'sqm';
+  if (!['sqft', 'sqm'].includes(payload.coveragePerBoxUnit)) {
+    errors.push('coveragePerBoxUnit must be sqft or sqm');
+  }
+
+  const numericFields = [
+    ['retailPrice', ['retailPrice', 'retail price', 'price'], { required: true, min: 0 }],
+    ['costPrice', ['costPrice', 'cost price'], { required: true, min: 0 }],
+    ['stock', ['stock', 'quantity', 'qty'], { required: false, min: 0 }],
+    ['tilesPerBox', ['tilesPerBox', 'tiles per box'], { required: false, min: 0 }],
+    ['coveragePerBox', ['coveragePerBox', 'coverage per box'], { required: false, min: 0 }],
+    ['weightPerBox', ['weightPerBox', 'weight per box'], { required: false, min: 0 }],
+    ['discountSalePrice', ['discountSalePrice', 'discount sale price'], { required: false, min: 0 }],
+    ['builderPrice', ['builderPrice', 'builder price'], { required: false, min: 0 }],
+    ['taxPercent', ['taxPercent', 'tax percent', 'gst'], { required: false, min: 0 }],
+  ];
+
+  numericFields.forEach(([field, aliases, options]) => {
+    const result = csvNumber(row, aliases, options);
+    if (result.error) errors.push(result.error);
+    if (result.value !== undefined) payload[field] = result.value;
+  });
+
+  if (payload.taxPercent !== undefined && payload.taxPercent > 100) {
+    errors.push('taxPercent must be 100 or less');
+  }
+
+  return { payload, errors };
+}
+
+function unitToPricingUnit(unit) {
+  const normalizedUnit = String(unit || '').trim().toLowerCase();
+  if (normalizedUnit === 'pieces' || normalizedUnit === 'piece' || normalizedUnit === 'pcs') {
+    return 'per_piece';
+  }
+  if (normalizedUnit === 'sqft' || normalizedUnit === 'sq ft') {
+    return 'per_sqft';
+  }
+  if (normalizedUnit === 'box' || normalizedUnit === 'boxes') {
+    return 'per_box';
+  }
+  return 'per_sqm';
+}
+
 async function resolveSupplierDocument({ supplierId, supplierName, fallbackSupplierName }) {
   const normalizedSupplierId = String(supplierId || '').trim();
   if (normalizedSupplierId) {
@@ -232,6 +391,108 @@ exports.createProduct = async (req, res) => {
     });
   } catch (error) {
     res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// @desc    Bulk import products from CSV
+// @route   POST /api/products/import-csv
+// @access  Private
+exports.importCsvProducts = async (req, res) => {
+  try {
+    if (!req.body || typeof req.body !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'Please upload a CSV file',
+      });
+    }
+
+    const { rows, error } = parseCsv(req.body);
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        message: error,
+      });
+    }
+
+    const result = {
+      created: 0,
+      updated: 0,
+      failed: 0,
+      errors: [],
+    };
+
+    for (const { rowNumber, row } of rows) {
+      const { payload, errors } = buildProductPayloadFromCsv(row);
+
+      if (payload.supplierType === 'third-party') {
+        const { supplierDoc, error: supplierError } = await resolveSupplierDocument({
+          supplierName: payload.supplierName,
+        });
+
+        if (supplierError) {
+          errors.push(supplierError);
+        } else {
+          payload.supplier = supplierDoc._id;
+          payload.supplierName = supplierDoc.name;
+        }
+      } else {
+        payload.supplier = null;
+        payload.supplierName = '';
+      }
+
+      if (payload.stock !== undefined) {
+        payload.stock = normalizeStockByUnit(payload.stock, payload.unit);
+      }
+
+      if (errors.length > 0) {
+        result.failed += 1;
+        result.errors.push({ row: rowNumber, errors });
+        continue;
+      }
+
+      const sku = String(payload.sku || '').trim().toUpperCase();
+      let product = await Product.findOne({ sku });
+      const isNewProduct = !product;
+
+      if (!product) {
+        product = new Product({
+          ...payload,
+          sku,
+          createdBy: req.user.id,
+        });
+      } else {
+        product.set({
+          ...payload,
+          sku,
+        });
+      }
+
+      try {
+        await product.save();
+        if (isNewProduct) {
+          result.created += 1;
+        } else {
+          result.updated += 1;
+        }
+      } catch (saveError) {
+        result.failed += 1;
+        result.errors.push({
+          row: rowNumber,
+          errors: [saveError.message],
+        });
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `CSV import completed. Created: ${result.created}, Updated: ${result.updated}, Failed: ${result.failed}`,
+      importResult: result,
+    });
+  } catch (error) {
+    res.status(500).json({
       success: false,
       message: error.message,
     });

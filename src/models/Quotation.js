@@ -146,6 +146,23 @@ const quotationSchema = new mongoose.Schema(
       enum: ['draft', 'sent', 'accepted', 'rejected', 'expired', 'converted', 'cancelled'],
       default: 'draft',
     },
+    responseToken: {
+      type: String,
+      trim: true,
+    },
+    clientResponseRemarks: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    clientRespondedAt: {
+      type: Date,
+    },
+    clientResponseEmail: {
+      type: String,
+      trim: true,
+      lowercase: true,
+    },
     convertedToInvoice: {
       type: Boolean,
       default: false,
@@ -202,5 +219,6 @@ quotationSchema.index({ quotationNumber: 1 }, { unique: true, sparse: true });
 quotationSchema.index({ customerName: 'text' });
 quotationSchema.index({ status: 1, createdAt: -1 });
 quotationSchema.index({ createdBy: 1, createdAt: -1 });
+quotationSchema.index({ responseToken: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('Quotation', quotationSchema);
