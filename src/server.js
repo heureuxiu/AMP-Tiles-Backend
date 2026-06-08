@@ -2,6 +2,7 @@ const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
+const http = require("http");
 const connectDB = require("./config/database");
 
 // Load env vars
@@ -100,7 +101,20 @@ app.use((req, res) => {
 
 const PORT = process.env.PORT || 5000;
 
-const server = app.listen(PORT, () => {
+const server = http.createServer(app);
+
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(
+      `Port ${PORT} is already in use. Set a different PORT in server/.env or stop the process using that port.`
+    );
+    process.exit(1);
+  }
+
+  throw err;
+});
+
+server.listen(PORT, () => {
   console.log(
     `Server running in ${process.env.NODE_ENV || "development"} mode on port ${PORT}`
   );

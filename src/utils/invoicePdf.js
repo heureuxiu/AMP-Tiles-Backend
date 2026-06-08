@@ -92,6 +92,12 @@
     return String(source?.deliveryAddress || source?.customerAddress || '').trim();
   }
 
+  function getLineTotalExGst(item) {
+    const base = (Number(item?.quantity) || 0) * (Number(item?.rate) || 0);
+    const discountPercent = Number(item?.discountPercent) || 0;
+    return Math.round(base * (1 - discountPercent / 100) * 100) / 100;
+  }
+
   function getLogoBase64() {
     return readLogoBase64();
   }
@@ -132,24 +138,22 @@
         <td class="right">${formatNumber(item.rate)}</td>
         <td class="center">${item.discountPercent != null && item.discountPercent > 0 ? item.discountPercent + '%' : '-'}</td>
         <td class="center">${item.taxPercent != null ? item.taxPercent + '%' : taxRate + '%'}</td>
-        <td class="right">${formatNumber(item.lineTotal)}</td>
+        <td class="right">${formatNumber(getLineTotalExGst(item))}</td>
       </tr>`
     ).join('');
 
     // Recompute totals from lineTotals for accuracy (avoids relying on potentially stale stored values)
     const itemsPreTax = Math.round(items.reduce((sum, item) => {
-      const taxP = Number(item.taxPercent ?? taxRate);
-      return sum + (Number(item.lineTotal || 0) / (1 + taxP / 100));
+      return sum + getLineTotalExGst(item);
     }, 0) * 100) / 100;
     const itemsGst = Math.round(items.reduce((sum, item) => {
       const taxP = Number(item.taxPercent ?? taxRate);
-      const lt = Number(item.lineTotal || 0);
-      return sum + (lt - lt / (1 + taxP / 100));
+      const lt = getLineTotalExGst(item);
+      return sum + (lt * (taxP / 100));
     }, 0) * 100) / 100;
     const discountAmount = inv.discountAmount ?? inv.discount ?? 0;
     const deliveryCost = Math.max(0, Number(inv.deliveryCost) || 0);
     const deliveryGst = Math.round(deliveryCost * (taxRate / 100) * 100) / 100;
-    const deliveryTotal = Math.round((deliveryCost + deliveryGst) * 100) / 100;
     const subtotal = Math.round((itemsPreTax - discountAmount + deliveryCost) * 100) / 100;
     const totalGst = Math.round((itemsGst + deliveryGst) * 100) / 100;
     const grandTotal = Math.round((subtotal + totalGst) * 100) / 100;
@@ -180,7 +184,7 @@
         <td class="right">${formatNumber(deliveryCost)}</td>
         <td class="center">-</td>
         <td class="center">${taxRate}%</td>
-        <td class="right">${formatNumber(deliveryTotal)}</td>
+        <td class="right">${formatNumber(deliveryCost)}</td>
       </tr>` : '';
 
     return `
@@ -500,8 +504,8 @@
           <th class="center">QUANTITY</th>
           <th class="right">RATE</th>
           <th class="center">DISC%</th>
-          <th class="center">TAX%</th>
-          <th class="right">AMOUNT AUD</th>
+          <th class="center">GST</th>
+          <th class="right">TOTAL EX GST</th>
         </tr>
       </thead>
       <tbody>

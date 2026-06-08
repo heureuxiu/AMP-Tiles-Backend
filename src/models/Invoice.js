@@ -54,11 +54,11 @@ const invoiceItemSchema = new mongoose.Schema({
   },
 });
 
-// Recalculate line total for an item: (qty * rate) * (1 - discount%/100) * (1 + tax%/100)
+// Recalculate line total for an item excluding GST: (qty * rate) * (1 - discount%/100)
 function calcLineTotal(item) {
   const base = (item.quantity || 0) * (item.rate || 0);
   const afterDiscount = base * (1 - (item.discountPercent || 0) / 100);
-  return Math.round(afterDiscount * (1 + ((item.taxPercent ?? 10) / 100)) * 100) / 100;
+  return Math.round(afterDiscount * 100) / 100;
 }
 
 function toCents(value) {
@@ -190,10 +190,9 @@ invoiceSchema.pre('save', function () {
 
   if (this.items && this.items.length > 0) {
     const txRate = this.taxRate ?? 10;
-    // subtotal = sum of pre-tax bases (lineTotal already includes per-item GST)
+    // subtotal = sum of line totals excluding GST
     this.subtotal = Math.round(this.items.reduce((sum, item) => {
-      const taxP = Number(item.taxPercent ?? txRate);
-      return sum + (Number(item.lineTotal || 0) / (1 + taxP / 100));
+      return sum + Number(item.lineTotal || 0);
     }, 0) * 100) / 100;
     if (this.discount > 0) {
       this.discountAmount =
@@ -203,11 +202,11 @@ invoiceSchema.pre('save', function () {
     } else {
       this.discountAmount = 0;
     }
-    // tax = sum of per-item GST amounts embedded in lineTotals
+    // tax = sum of per-item GST based on ex-GST line totals
     this.tax = Math.round(this.items.reduce((sum, item) => {
       const taxP = Number(item.taxPercent ?? txRate);
       const lt = Number(item.lineTotal || 0);
-      return sum + (lt - lt / (1 + taxP / 100));
+      return sum + (lt * (taxP / 100));
     }, 0) * 100) / 100;
     const deliveryGst = Math.round(this.deliveryCost * txRate / 100 * 100) / 100;
     this.grandTotal = Math.round(

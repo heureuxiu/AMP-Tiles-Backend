@@ -51,6 +51,7 @@ function getInvoiceAmountSnapshot(invoice) {
       : DEFAULT_DELIVERY_COST;
   const deliveryGst = Math.round((deliveryCost * DELIVERY_GST_RATE)) / 100;
   const grandTotal = baseTotal + deliveryCost + deliveryGst;
+  const gstTotal = taxAmount + deliveryGst;
 
   return {
     subtotal: Math.round(subtotal * 100) / 100,
@@ -58,6 +59,7 @@ function getInvoiceAmountSnapshot(invoice) {
     taxAmount: Math.round(taxAmount * 100) / 100,
     deliveryCost: Math.round(deliveryCost * 100) / 100,
     deliveryGst: Math.round(deliveryGst * 100) / 100,
+    gstTotal: Math.round(gstTotal * 100) / 100,
     grandTotal: Math.round(grandTotal * 100) / 100,
   };
 }
@@ -113,11 +115,8 @@ function buildInvoiceEmail(invoice) {
     `Due Date: ${invoice.dueDate ? formatDate(invoice.dueDate) : 'N/A'}`,
     `Delivery Address: ${deliveryAddress || 'N/A'}`,
     `Subtotal: ${formatCurrency(payment.amounts.subtotal)}`,
-    `Tax (GST): ${formatCurrency(payment.amounts.taxAmount)}`,
     `Delivery Cost: ${formatCurrency(payment.amounts.deliveryCost)}`,
-    payment.amounts.deliveryGst > 0
-      ? `Delivery GST (${DELIVERY_GST_RATE}%): ${formatCurrency(payment.amounts.deliveryGst)}`
-      : '',
+    `GST: ${formatCurrency(payment.amounts.gstTotal)}`,
     `Grand Total: ${formatCurrency(payment.amounts.grandTotal)}`,
     `Amount Received: ${formatCurrency(payment.paidCents / 100)}`,
     `Outstanding: ${formatCurrency(payment.remainingCents / 100)}`,
@@ -129,7 +128,6 @@ function buildInvoiceEmail(invoice) {
     '',
     'Thank you,',
     COMPANY_DETAILS.name,
-    `Email: ${COMPANY_DETAILS.email}`,
   ]
     .filter(Boolean)
     .join('\n');
@@ -144,13 +142,8 @@ function buildInvoiceEmail(invoice) {
         <strong>Due Date:</strong> ${escapeHtml(invoice.dueDate ? formatDate(invoice.dueDate) : 'N/A')}<br/>
         <strong>Delivery Address:</strong> ${escapeHtml(deliveryAddress || 'N/A')}<br/>
         <strong>Subtotal:</strong> ${escapeHtml(formatCurrency(payment.amounts.subtotal))}<br/>
-        <strong>Tax (GST):</strong> ${escapeHtml(formatCurrency(payment.amounts.taxAmount))}<br/>
         <strong>Delivery Cost:</strong> ${escapeHtml(formatCurrency(payment.amounts.deliveryCost))}<br/>
-        ${
-          payment.amounts.deliveryGst > 0
-            ? `<strong>Delivery GST (${DELIVERY_GST_RATE}%):</strong> ${escapeHtml(formatCurrency(payment.amounts.deliveryGst))}<br/>`
-            : ''
-        }
+        <strong>GST:</strong> ${escapeHtml(formatCurrency(payment.amounts.gstTotal))}<br/>
         <strong>Grand Total:</strong> ${escapeHtml(formatCurrency(payment.amounts.grandTotal))}<br/>
         <strong>Amount Received:</strong> ${escapeHtml(formatCurrency(payment.paidCents / 100))}<br/>
         <strong>Outstanding:</strong> ${escapeHtml(formatCurrency(payment.remainingCents / 100))}<br/>
@@ -160,8 +153,7 @@ function buildInvoiceEmail(invoice) {
       <p>Thank you for your business and continued support.</p>
       <p style="margin-top:24px;">
         Thank you,<br/>
-        ${escapeHtml(COMPANY_DETAILS.name)}<br/>
-        Email: ${escapeHtml(COMPANY_DETAILS.email)}
+        ${escapeHtml(COMPANY_DETAILS.name)}
       </p>
     </div>
   `;

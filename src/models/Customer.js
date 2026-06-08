@@ -26,6 +26,10 @@ const customerSchema = new mongoose.Schema(
         'Please provide a valid email',
       ],
     },
+    abn: {
+      type: String,
+      trim: true,
+    },
     address: {
       street: { type: String, trim: true },
       city: { type: String, trim: true },
@@ -85,6 +89,7 @@ customerSchema.pre('save', async function () {
 
 customerSchema.index({ name: 1 });
 customerSchema.index({ email: 1 });
+customerSchema.index({ abn: 1 });
 customerSchema.index({ status: 1 });
 customerSchema.index({ createdAt: -1 });
 

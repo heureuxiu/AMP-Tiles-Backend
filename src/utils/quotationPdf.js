@@ -100,6 +100,12 @@ function getDeliveryAddress(source) {
   return String(source?.deliveryAddress || source?.customerAddress || '').trim();
 }
 
+function getLineTotalExGst(item) {
+  const base = (Number(item?.quantity) || 0) * (Number(item?.rate) || 0);
+  const discountPercent = Number(item?.discountPercent) || 0;
+  return Math.round(base * (1 - discountPercent / 100) * 100) / 100;
+}
+
 function getLogoBase64() {
   return readLogoBase64();
 }
@@ -134,7 +140,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
       <td class="right">${formatNumber(item.rate)}</td>
       <td class="center">${item.discountPercent != null && item.discountPercent > 0 ? item.discountPercent + '%' : '-'}</td>
       <td class="center">${item.taxPercent != null ? item.taxPercent + '%' : (quote.taxRate != null ? quote.taxRate + '%' : '10%')}</td>
-      <td class="right">${formatNumber(item.lineTotal)}</td>
+      <td class="right">${formatNumber(getLineTotalExGst(item))}</td>
     </tr>`
     )
     .join('');
@@ -142,14 +148,13 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
   const items = quote.items || [];
   const taxRate = quote.taxRate || 10;
   const itemsPreTax = Math.round(items.reduce((sum, item) => {
-    const taxPercent = Number(item.taxPercent ?? taxRate);
-    const lineTotal = Number(item.lineTotal || 0);
-    return sum + (lineTotal / (1 + taxPercent / 100));
+    const lineTotal = getLineTotalExGst(item);
+    return sum + lineTotal;
   }, 0) * 100) / 100;
   const itemsGst = Math.round(items.reduce((sum, item) => {
     const taxPercent = Number(item.taxPercent ?? taxRate);
-    const lineTotal = Number(item.lineTotal || 0);
-    return sum + (lineTotal - lineTotal / (1 + taxPercent / 100));
+    const lineTotal = getLineTotalExGst(item);
+    return sum + (lineTotal * (taxPercent / 100));
   }, 0) * 100) / 100;
   const storedSubtotal = Number(quote.subtotal) || 0;
   const storedDiscount = Number(quote.discount) || 0;
@@ -190,7 +195,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
       <td class="right">${formatNumber(deliveryCost)}</td>
       <td class="center">-</td>
       <td class="center">${DELIVERY_GST_RATE}%</td>
-      <td class="right">${formatNumber(deliveryCost + deliveryGst)}</td>
+      <td class="right">${formatNumber(deliveryCost)}</td>
     </tr>` : '';
 
   return `
@@ -441,8 +446,8 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
         <th class="center">Quantity</th>
         <th class="right">Unit Price</th>
         <th class="center">Disc%</th>
-        <th class="center">Tax%</th>
-        <th class="right">Amount AUD</th>
+        <th class="center">GST</th>
+        <th class="right">Total ex GST</th>
       </tr>
     </thead>
     <tbody>

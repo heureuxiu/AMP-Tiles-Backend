@@ -181,7 +181,6 @@ function buildFallbackQuotationEmail(quotation) {
     '',
     'Thank you,',
     'AMP TILES',
-    'Email:sales@amptiles.com.au',
   ]
     .filter(Boolean)
     .join('\n');
@@ -199,7 +198,7 @@ function buildFallbackQuotationEmail(quotation) {
       </p>
       <p>From your attached quote you can accept or decline by replying to this email.</p>
       <p>Please do not hesitate to contact us if you have any questions.</p>
-      <p style="margin-top:24px;">Thank you,<br/>AMP TILES<br/>Email:sales@amptiles.com.au</p>
+      <p style="margin-top:24px;">Thank you,<br/>AMP TILES</p>
     </div>
   `;
 
@@ -241,6 +240,7 @@ if (mailerModule && typeof mailerModule.sendEmail === 'function') {
 const quotationEmailModule = loadOptionalModule([
   '../utils/quotationEmail',
   '../utils/quotation-email',
+  '../utils/qoutationEmail',
   '../utils/QuotationEmail',
 ]);
 if (quotationEmailModule && typeof quotationEmailModule.buildQuotationEmail === 'function') {
@@ -1022,7 +1022,7 @@ function buildQuotationItem(product, item) {
   const discountAmount = (base * discountPercent) / 100;
   const discountedBase = Math.max(0, base - discountAmount);
   const taxAmount = (discountedBase * taxPercent) / 100;
-  const lineTotal = Math.round((discountedBase + taxAmount) * 100) / 100;
+  const lineTotal = roundMoney(discountedBase);
 
   return {
     populated: {
@@ -1667,11 +1667,11 @@ exports.convertToInvoice = async (req, res) => {
       invoiceDate: quotation.quotationDate || new Date(),
       dueDate: quotation.validUntil,
       items: invoiceItems,
-      // Quotation line items already include discount and tax in lineTotal.
-      // Keep invoice-level discount/tax neutral to prevent double-application.
+      // Quotation line items already include discount in lineTotal; GST is calculated separately.
+      // Keep invoice-level discount neutral to prevent double-application.
       discount: 0,
       discountType: 'fixed',
-      taxRate: 0,
+      taxRate: quotation.taxRate || 10,
       deliveryCost: normalizeDeliveryCost(quotation.deliveryCost),
       notes: quotation.notes,
       terms: quotation.terms,
@@ -1796,5 +1796,4 @@ exports.getQuotationStats = async (req, res) => {
     });
   }
 };
-
 
