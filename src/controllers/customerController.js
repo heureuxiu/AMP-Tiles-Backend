@@ -242,8 +242,10 @@ async function buildMonthlyStatement(customerId, month) {
     return {
       _id: invoice._id,
       invoiceNumber: invoice.invoiceNumber || String(invoice._id),
+      reference: invoice.reference || '',
       date: invoice.invoiceDate,
       dueDate: invoice.dueDate,
+      paidDate: invoice.paidDate,
       status: invoice.status,
       paymentStatus: invoice.paymentStatus,
       subtotal: amounts.subtotal,
@@ -577,7 +579,7 @@ exports.getCustomerMonthlyStatementPdf = async (req, res) => {
     const filename = `monthly-statement-${safeCustomerName}-${statement.month}.pdf`;
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
     res.setHeader('Content-Length', pdfBuffer.length);
     res.send(pdfBuffer);
   } catch (error) {

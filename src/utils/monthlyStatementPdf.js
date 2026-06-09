@@ -10,10 +10,10 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-function formatMoney(value) {
+function formatNumber(value) {
   return new Intl.NumberFormat('en-AU', {
-    style: 'currency',
-    currency: 'AUD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   }).format(Number(value) || 0);
 }
 
@@ -21,78 +21,120 @@ function formatDate(value) {
   if (!value) return '';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleDateString('en-AU', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  });
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${date.getUTCDate()} ${months[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
 }
 
-function formatQuantity(value) {
-  const numeric = Number(value) || 0;
-  const rounded = Math.round(numeric * 1000) / 1000;
-  if (Number.isInteger(rounded)) return String(rounded);
-  return rounded.toFixed(3).replace(/\.?0+$/, '');
+function truncate(value, length = 18) {
+  const text = String(value || '').trim();
+  if (text.length <= length) return text;
+  return `${text.slice(0, Math.max(0, length - 3))}...`;
+}
+
+function getCompanyInfo() {
+  return {
+    name: 'AMP TILES PTY LTD',
+    tradingName: 'AMP TILES',
+    addressLine1: 'Unit 15/55 Anderson Road',
+    addressLine2: 'SMEATON GRANGE',
+    addressLine3: 'NSW 2567',
+    country: 'AUSTRALIA',
+    abn: '14 690 181 858',
+    bank: 'NAB',
+    accountName: 'AMP TILES PTY LTD',
+    bsb: '082-356',
+    accountNumber: '26-722-1347',
+  };
+}
+
+function getCustomerAddressLines(customer) {
+  return String(customer.address || '')
+    .split(',')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function buildActivityRows(statement) {
+  const rows = [];
+  let runningBalance = 0;
+
+  (statement.invoices || []).forEach((invoice) => {
+    const invoiceAmount = Number(invoice.total) || 0;
+    const paidAmount = Number(invoice.paid) || 0;
+    runningBalance += invoiceAmount;
+
+    rows.push({
+      date: invoice.date,
+      activity: `Invoice # ${invoice.invoiceNumber}`,
+      reference: invoice.reference || statement.customer?.name || '',
+      dueDate: invoice.dueDate,
+      invoiceAmount,
+      paymentAmount: 0,
+      balance: runningBalance,
+      isLink: true,
+    });
+
+    if (paidAmount > 0) {
+      runningBalance -= paidAmount;
+      rows.push({
+        date: invoice.paidDate || invoice.date,
+        activity: `Payment on Invoice # ${invoice.invoiceNumber}`,
+        reference: invoice.invoiceNumber,
+        dueDate: '',
+        invoiceAmount: 0,
+        paymentAmount: paidAmount,
+        balance: runningBalance,
+      });
+    }
+  });
+
+  if (rows.length === 0 && (statement.quotations || []).length > 0) {
+    (statement.quotations || []).forEach((quotation) => {
+      rows.push({
+        date: quotation.date,
+        activity: `Quotation # ${quotation.quotationNumber}`,
+        reference: quotation.status,
+        dueDate: quotation.validUntil,
+        invoiceAmount: 0,
+        paymentAmount: 0,
+        balance: runningBalance,
+      });
+    });
+  }
+
+  return rows.sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+}
+
+function buildActivityRowsHtml(rows) {
+  if (rows.length === 0) {
+    return `
+      <tr class="empty-row">
+        <td colspan="7">No transaction activity found for this period.</td>
+      </tr>
+    `;
+  }
+
+  return rows.map((row) => `
+    <tr>
+      <td>${escapeHtml(formatDate(row.date))}</td>
+      <td class="activity">${row.isLink ? `<span class="link">${escapeHtml(row.activity)}</span>` : escapeHtml(row.activity)}</td>
+      <td>${escapeHtml(truncate(row.reference))}</td>
+      <td>${escapeHtml(formatDate(row.dueDate))}</td>
+      <td class="right">${row.invoiceAmount ? formatNumber(row.invoiceAmount) : ''}</td>
+      <td class="right">${row.paymentAmount ? formatNumber(row.paymentAmount) : ''}</td>
+      <td class="right">${formatNumber(row.balance)}</td>
+    </tr>
+  `).join('');
 }
 
 function buildMonthlyStatementHtml(statement) {
   const logoSrc = readLogoBase64();
   const customer = statement.customer || {};
-  const totals = statement.totals || {};
-  const company = {
-    name: 'AMP TILES PTY LTD',
-    addressLine1: 'Unit 15/55 Anderson Road',
-    addressLine2: 'SMEATON GRANGE NSW 2567',
-    country: 'AUSTRALIA',
-    abn: '14 690 181 858',
-  };
-
-  const invoiceRows = (statement.invoices || [])
-    .map((invoice) => `
-      <tr>
-        <td>${escapeHtml(invoice.invoiceNumber)}</td>
-        <td>${escapeHtml(formatDate(invoice.date))}</td>
-        <td>${escapeHtml(invoice.status)}</td>
-        <td class="right">${formatMoney(invoice.subtotal)}</td>
-        <td class="right">${formatMoney(invoice.gst)}</td>
-        <td class="right">${formatMoney(invoice.delivery)}</td>
-        <td class="right">${formatMoney(invoice.total)}</td>
-        <td class="right">${formatMoney(invoice.paid)}</td>
-        <td class="right">${formatMoney(invoice.outstanding)}</td>
-      </tr>
-    `)
-    .join('');
-
-  const productRows = (statement.productSummary || [])
-    .map((item) => `
-      <tr>
-        <td>${escapeHtml(item.productName)}</td>
-        <td>${escapeHtml(item.size || '')}</td>
-        <td>${escapeHtml(item.unitType || '')}</td>
-        <td class="right">${formatQuantity(item.quantity)}</td>
-        <td class="right">${formatQuantity(item.boxes)}</td>
-        <td class="right">${formatQuantity(item.coverageSqm)}</td>
-        <td class="right">${formatQuantity(item.coverageSqft)}</td>
-        <td class="right">${formatMoney(item.unitPrice)}</td>
-        <td class="right">${formatMoney(item.total)}</td>
-      </tr>
-    `)
-    .join('');
-
-  const quotationRows = (statement.quotations || [])
-    .map((quotation) => `
-      <tr>
-        <td>${escapeHtml(quotation.quotationNumber)}</td>
-        <td>${escapeHtml(formatDate(quotation.date))}</td>
-        <td>${escapeHtml(quotation.status)}</td>
-        <td class="right">${formatMoney(quotation.total)}</td>
-      </tr>
-    `)
-    .join('');
-
-  const emptyMessage = statement.totalInvoiceCount === 0 && statement.totalQuotationCount === 0
-    ? '<div class="empty">No transactions found for this month.</div>'
-    : '';
+  const company = getCompanyInfo();
+  const rows = buildActivityRows(statement);
+  const totalDue = Number(statement.totals?.outstandingTotal) || 0;
+  const currentDue = 0;
+  const overdue = totalDue;
 
   return `<!DOCTYPE html>
   <html>
@@ -100,117 +142,298 @@ function buildMonthlyStatementHtml(statement) {
     <meta charset="utf-8" />
     <style>
       * { box-sizing: border-box; }
-      body { margin: 0; padding: 30px; font-family: Arial, Helvetica, sans-serif; color: #171717; font-size: 12px; line-height: 1.4; }
-      .header { display: flex; justify-content: space-between; gap: 24px; border-bottom: 2px solid #171717; padding-bottom: 16px; margin-bottom: 18px; }
-      .title { font-size: 26px; font-weight: 800; letter-spacing: .3px; margin-bottom: 5px; }
-      .muted { color: #525252; }
-      .company { text-align: right; font-size: 11px; }
-      .company img { height: 54px; margin-bottom: 6px; }
-      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 16px 0; }
-      .box { border: 1px solid #d4d4d4; border-radius: 6px; padding: 12px; }
-      .box h3 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .4px; }
-      .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 16px 0; }
-      .metric { border: 1px solid #d4d4d4; border-radius: 6px; padding: 10px; }
-      .metric .label { color: #525252; font-size: 10px; text-transform: uppercase; }
-      .metric .value { font-size: 15px; font-weight: 700; margin-top: 3px; }
-      table { width: 100%; border-collapse: collapse; margin-top: 8px; page-break-inside: auto; }
-      th, td { border: 1px solid #d4d4d4; padding: 6px; vertical-align: top; }
-      th { background: #f5f5f5; text-align: left; font-size: 10px; text-transform: uppercase; }
+      @page { size: A4; margin: 0; }
+      body {
+        margin: 0;
+        background: #ffffff;
+        color: #101010;
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 13px;
+        line-height: 1.32;
+      }
+      .page {
+        min-height: 1122px;
+        padding: 66px 52px 38px;
+        position: relative;
+      }
+      .top-logo {
+        position: absolute;
+        right: 66px;
+        top: 34px;
+        text-align: right;
+      }
+      .top-logo img {
+        width: 184px;
+        max-height: 82px;
+        object-fit: contain;
+      }
+      .fallback-logo {
+        color: #0f172a;
+        font-size: 24px;
+        font-weight: 700;
+        letter-spacing: .04em;
+      }
+      .hero {
+        display: grid;
+        grid-template-columns: 1.5fr .7fr .85fr;
+        gap: 28px;
+        margin-top: 135px;
+        align-items: start;
+      }
+      h1 {
+        margin: 0;
+        font-size: 48px;
+        font-weight: 400;
+        letter-spacing: 0;
+        line-height: 1.05;
+        white-space: nowrap;
+      }
+      .customer-name {
+        margin-top: 18px;
+        text-align: center;
+        font-size: 15px;
+        letter-spacing: .02em;
+        text-transform: uppercase;
+      }
+      .meta {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        column-gap: 16px;
+        row-gap: 5px;
+        font-size: 15px;
+      }
+      .meta .label { font-weight: 700; }
+      .company {
+        font-size: 15px;
+        text-transform: uppercase;
+      }
+      .company div { margin-bottom: 3px; }
+      .activity-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 150px;
+        table-layout: fixed;
+      }
+      .activity-table th {
+        border-bottom: 1.5px solid #171717;
+        padding: 0 10px 11px 0;
+        text-align: left;
+        font-size: 16px;
+        font-weight: 700;
+      }
+      .activity-table td {
+        border-bottom: 1px solid #dddddd;
+        padding: 8px 10px 8px 0;
+        vertical-align: top;
+        font-size: 15px;
+      }
+      .activity-table tr:last-child td { border-bottom: none; }
+      .activity-table .date { width: 105px; }
+      .activity-table .activity-col { width: 265px; }
+      .activity-table .ref { width: 120px; }
+      .activity-table .due { width: 110px; }
+      .activity-table .amount { width: 132px; }
+      .activity-table .payment { width: 112px; }
+      .activity-table .balance { width: 125px; }
+      .activity { line-height: 1.18; }
+      .link {
+        color: #0077b6;
+        text-decoration: underline;
+      }
       .right { text-align: right; }
-      .section { margin-top: 18px; }
-      .section h2 { font-size: 15px; margin: 0 0 6px; }
-      .payment { margin-left: auto; width: 310px; }
-      .payment td:first-child { font-weight: 600; }
-      .payment .grand td { font-size: 14px; font-weight: 800; background: #f5f5f5; }
-      .empty { border: 1px dashed #a3a3a3; border-radius: 6px; padding: 18px; text-align: center; color: #525252; margin: 16px 0; }
+      .empty-row td {
+        color: #666666;
+        text-align: center;
+        padding: 20px 0;
+      }
+      .balance-line {
+        border-top: 2px solid #171717;
+        margin-top: 16px;
+        padding-top: 17px;
+        display: flex;
+        justify-content: flex-end;
+        align-items: baseline;
+        gap: 20px;
+        font-size: 25px;
+      }
+      .balance-line .label { font-weight: 400; }
+      .balance-line .amount { font-weight: 700; }
+      .bank {
+        margin-top: 18px;
+        font-size: 15px;
+      }
+      .bank div { margin-bottom: 4px; }
+      .payment-advice {
+        position: absolute;
+        left: 52px;
+        right: 52px;
+        bottom: 46px;
+        border-top: 2px dashed #171717;
+        padding-top: 22px;
+      }
+      .scissors {
+        position: absolute;
+        left: 8px;
+        top: -14px;
+        background: #fff;
+        padding-right: 10px;
+        font-size: 22px;
+        line-height: 1;
+      }
+      .advice-grid {
+        display: grid;
+        grid-template-columns: .9fr 1fr;
+        gap: 72px;
+      }
+      .advice-title {
+        margin: 0 0 6px;
+        font-size: 42px;
+        line-height: 1;
+        font-weight: 400;
+        letter-spacing: 0;
+      }
+      .to-block {
+        margin-left: 56px;
+        font-size: 15px;
+      }
+      .summary-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 15px;
+      }
+      .summary-table th,
+      .summary-table td {
+        text-align: left;
+        padding: 8px 0;
+        border-bottom: 1px solid #d4d4d4;
+      }
+      .summary-table th { font-weight: 700; }
+      .amount-line {
+        margin-top: 16px;
+        display: grid;
+        grid-template-columns: 160px 1fr;
+        gap: 8px;
+        align-items: end;
+        font-size: 15px;
+      }
+      .amount-line .label { font-weight: 700; }
+      .write-line {
+        border-bottom: 1.5px solid #171717;
+        height: 24px;
+      }
+      .hint {
+        grid-column: 2;
+        color: #777777;
+        font-size: 12px;
+        padding-top: 3px;
+      }
+      .footer {
+        position: absolute;
+        left: 52px;
+        right: 52px;
+        bottom: 22px;
+        font-size: 11px;
+      }
     </style>
   </head>
   <body>
-    <div class="header">
-      <div>
-        <div class="title">Monthly Statement</div>
-        <div class="muted">${escapeHtml(statement.monthLabel)} (${escapeHtml(formatDate(statement.dateRange?.start))} - ${escapeHtml(formatDate(statement.dateRange?.end))})</div>
+    <main class="page">
+      <div class="top-logo">
+        ${logoSrc ? `<img src="${logoSrc}" alt="AMP Tiles" />` : `<div class="fallback-logo">${escapeHtml(company.tradingName)}</div>`}
       </div>
-      <div class="company">
-        ${logoSrc ? `<img src="${logoSrc}" alt="AMP Tiles" />` : ''}
-        <div><strong>${escapeHtml(company.name)}</strong></div>
-        <div>${escapeHtml(company.addressLine1)}</div>
-        <div>${escapeHtml(company.addressLine2)}</div>
-        <div>${escapeHtml(company.country)}</div>
-        <div>ABN: ${escapeHtml(company.abn)}</div>
-      </div>
-    </div>
 
-    <div class="grid">
-      <div class="box">
-        <h3>Customer Details</h3>
-        <div><strong>${escapeHtml(customer.name)}</strong></div>
-        <div>${escapeHtml(customer.phone || '')}</div>
-        <div>${escapeHtml(customer.email || '')}</div>
-        <div>${escapeHtml(customer.address || '')}</div>
-        ${customer.abn ? `<div>ABN: ${escapeHtml(customer.abn)}</div>` : ''}
-      </div>
-      <div class="box">
-        <h3>Statement Summary</h3>
-        <div>Invoices: <strong>${statement.totalInvoiceCount}</strong></div>
-        <div>Quotations: <strong>${statement.totalQuotationCount}</strong></div>
-        <div>Transactions: <strong>${statement.transactionCount}</strong></div>
-        <div>Generated: <strong>${escapeHtml(formatDate(new Date()))}</strong></div>
-      </div>
-    </div>
+      <section class="hero">
+        <div>
+          <h1>STATEMENT - Activity</h1>
+          <div class="customer-name">${escapeHtml(customer.name)}</div>
+        </div>
 
-    <div class="summary">
-      <div class="metric"><div class="label">Grand Total</div><div class="value">${formatMoney(totals.grandTotal)}</div></div>
-      <div class="metric"><div class="label">Paid</div><div class="value">${formatMoney(totals.paidTotal)}</div></div>
-      <div class="metric"><div class="label">Outstanding</div><div class="value">${formatMoney(totals.outstandingTotal)}</div></div>
-      <div class="metric"><div class="label">GST</div><div class="value">${formatMoney(totals.gstTotal)}</div></div>
-    </div>
+        <div class="meta">
+          <div class="label">From Date</div>
+          <div>${escapeHtml(formatDate(statement.dateRange?.start))}</div>
+          <div class="label">To Date</div>
+          <div>${escapeHtml(formatDate(statement.dateRange?.end))}</div>
+          <div class="label" style="padding-top:10px;">ABN</div>
+          <div style="padding-top:10px;">${escapeHtml(company.abn)}</div>
+        </div>
 
-    ${emptyMessage}
+        <div class="company">
+          <div>${escapeHtml(company.name)}</div>
+          <div>${escapeHtml(company.addressLine1)}</div>
+          <div>${escapeHtml(company.addressLine2)}</div>
+          <div>${escapeHtml(company.addressLine3)}</div>
+          <div>${escapeHtml(company.country)}</div>
+        </div>
+      </section>
 
-    <div class="section">
-      <h2>Invoice Breakdown</h2>
-      <table>
+      <table class="activity-table">
         <thead>
-          <tr><th>Invoice</th><th>Date</th><th>Status</th><th class="right">Subtotal</th><th class="right">GST</th><th class="right">Delivery</th><th class="right">Total</th><th class="right">Paid</th><th class="right">Outstanding</th></tr>
+          <tr>
+            <th class="date">Date</th>
+            <th class="activity-col">Activity</th>
+            <th class="ref">Reference</th>
+            <th class="due">Due Date</th>
+            <th class="amount right">Invoice Amount</th>
+            <th class="payment right">Payments</th>
+            <th class="balance right">Balance AUD</th>
+          </tr>
         </thead>
-        <tbody>${invoiceRows || '<tr><td colspan="9" class="right">No invoices for this month.</td></tr>'}</tbody>
-      </table>
-    </div>
-
-    <div class="section">
-      <h2>Product / Tile Summary</h2>
-      <table>
-        <thead>
-          <tr><th>Product</th><th>Size</th><th>Unit</th><th class="right">Qty</th><th class="right">Boxes</th><th class="right">Sqm</th><th class="right">Sqft</th><th class="right">Unit Price</th><th class="right">Total</th></tr>
-        </thead>
-        <tbody>${productRows || '<tr><td colspan="9" class="right">No products sold for this month.</td></tr>'}</tbody>
-      </table>
-    </div>
-
-    <div class="section">
-      <h2>Quotation Breakdown</h2>
-      <table>
-        <thead>
-          <tr><th>Quotation</th><th>Date</th><th>Status</th><th class="right">Total</th></tr>
-        </thead>
-        <tbody>${quotationRows || '<tr><td colspan="4" class="right">No quotations for this month.</td></tr>'}</tbody>
-      </table>
-    </div>
-
-    <div class="section payment">
-      <table>
         <tbody>
-          <tr><td>Subtotal before GST</td><td class="right">${formatMoney(totals.subtotalBeforeGst)}</td></tr>
-          <tr><td>Discount</td><td class="right">-${formatMoney(totals.discountTotal)}</td></tr>
-          <tr><td>Delivery</td><td class="right">${formatMoney(totals.deliveryTotal)}</td></tr>
-          <tr><td>GST</td><td class="right">${formatMoney(totals.gstTotal)}</td></tr>
-          <tr class="grand"><td>Grand Total</td><td class="right">${formatMoney(totals.grandTotal)}</td></tr>
-          <tr><td>Paid Amount</td><td class="right">${formatMoney(totals.paidTotal)}</td></tr>
-          <tr class="grand"><td>Outstanding</td><td class="right">${formatMoney(totals.outstandingTotal)}</td></tr>
+          ${buildActivityRowsHtml(rows)}
         </tbody>
       </table>
-    </div>
+
+      <div class="balance-line">
+        <span class="label">BALANCE DUE AUD</span>
+        <span class="amount">${formatNumber(totalDue)}</span>
+      </div>
+
+      <section class="bank">
+        <div>Account Name: ${escapeHtml(company.accountName)}</div>
+        <div>BSB Number: ${escapeHtml(company.bsb)}</div>
+        <div>Account Number: ${escapeHtml(company.accountNumber)}</div>
+      </section>
+
+      <section class="payment-advice">
+        <div class="scissors">&#9986;</div>
+        <div class="advice-grid">
+          <div>
+            <h2 class="advice-title">PAYMENT ADVICE</h2>
+            <div class="to-block">
+              <div>To: ${escapeHtml(company.name)}</div>
+              <div>${escapeHtml(company.addressLine1)}</div>
+              <div>${escapeHtml(company.addressLine2)}</div>
+              <div>${escapeHtml(company.addressLine3)}</div>
+              <div>${escapeHtml(company.country)}</div>
+            </div>
+          </div>
+          <div>
+            <table class="summary-table">
+              <tbody>
+                <tr>
+                  <th>Customer</th>
+                  <td>${escapeHtml(customer.name)}</td>
+                </tr>
+                <tr>
+                  <th>Overdue<br><span style="font-weight:400">${formatNumber(overdue)}</span></th>
+                  <th>Current<br><span style="font-weight:400">${formatNumber(currentDue)}</span></th>
+                  <th>Total AUD Due<br><span style="font-weight:400">${formatNumber(totalDue)}</span></th>
+                </tr>
+              </tbody>
+            </table>
+            <div class="amount-line">
+              <div class="label">Amount Enclosed</div>
+              <div class="write-line"></div>
+              <div class="hint">Enter the amount you are paying above</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="footer">
+        ABN&nbsp; ${escapeHtml(company.abn)}. &nbsp; Registered Office: ${escapeHtml(company.addressLine1)}, ${escapeHtml(company.addressLine2)}, ${escapeHtml(company.addressLine3)}, Australia.
+      </div>
+    </main>
   </body>
   </html>`;
 }
@@ -226,7 +449,7 @@ async function generateMonthlyStatementPdf(statement) {
     const pdfBuffer = await page.pdf({
       format: 'A4',
       printBackground: true,
-      margin: { top: '18px', right: '18px', bottom: '18px', left: '18px' },
+      margin: { top: '0px', right: '0px', bottom: '0px', left: '0px' },
     });
     return Buffer.from(pdfBuffer);
   } finally {

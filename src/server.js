@@ -20,9 +20,16 @@ const app = express();
  * - Optionally allows Vercel preview deployments (*.vercel.app)
  */
 const allowedOrigins = [
-  process.env.CLIENT_URL,  "https://amp-tiles-dashbaord.vercel.app",
+  process.env.CLIENT_URL,
+  "https://amp-tiles-dashbaord.vercel.app",
   "http://localhost:3000",
   "http://localhost:3001",
+  "http://localhost:3002",
+  "http://localhost:3003",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:3001",
+  "http://127.0.0.1:3002",
+  "http://127.0.0.1:3003",
 ].filter(Boolean);
 
 app.use(
@@ -99,7 +106,7 @@ app.use((req, res) => {
   });
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5002;
 
 const server = http.createServer(app);
 
