@@ -29,6 +29,13 @@ function formatDate(date) {
   return `${day} ${months[d.getMonth()]} ${d.getFullYear()}`;
 }
 
+function formatQuantity(value) {
+  const numeric = Number(value) || 0;
+  const rounded = Math.round(numeric * 1000) / 1000;
+  if (Number.isInteger(rounded)) return String(rounded);
+  return rounded.toFixed(3).replace(/\.?0+$/, '');
+}
+
 function getItemSize(item) {
   const rawSize = item?.product?.size ?? item?.size;
   return rawSize ? String(rawSize) : '';
@@ -36,6 +43,27 @@ function getItemSize(item) {
 
 function getDisplayUnit(unitType) {
   return String(unitType || '');
+}
+
+function getCoveragePerBoxSqm(item) {
+  const coveragePerBox = Number(item?.product?.coveragePerBox) || 0;
+  if (coveragePerBox <= 0) return 0;
+  return String(item?.product?.coveragePerBoxUnit || '').toLowerCase() === 'sqm'
+    ? coveragePerBox
+    : coveragePerBox * 0.092903;
+}
+
+function getDisplayBoxes(item) {
+  const unitType = String(item?.unitType || '').toLowerCase();
+  const quantity = Number(item?.quantityOrdered ?? item?.quantity) || 0;
+  if (unitType.includes('box')) return formatQuantity(quantity);
+
+  const coverageSqm = Number(item?.coverageSqm);
+  const perBoxSqm = getCoveragePerBoxSqm(item);
+  if (Number.isFinite(coverageSqm) && coverageSqm > 0 && perBoxSqm > 0) {
+    return formatQuantity(Math.ceil(coverageSqm / perBoxSqm));
+  }
+  return '-';
 }
 
 function getLogoBase64() {
@@ -69,6 +97,7 @@ function buildPurchaseOrderHtml(purchaseOrder, companyInfo = {}) {
       <td>${escapeHtml(item.productName || item.product?.name || '')}</td>
       <td>${escapeHtml(getItemSize(item))}</td>
       <td class="center">${escapeHtml(String(item.quantityOrdered ?? 0))}</td>
+      <td class="center">${escapeHtml(getDisplayBoxes(item))}</td>
       <td class="center">${escapeHtml(getDisplayUnit(item.unitType))}</td>
       <td class="right">${formatNumber(item.rate)}</td>
       <td class="center">${item.taxPercent ? item.taxPercent + '%' : '10%'}</td>
@@ -326,6 +355,7 @@ function buildPurchaseOrderHtml(purchaseOrder, companyInfo = {}) {
         <th>Description</th>
         <th>Size</th>
         <th class="center">Quantity</th>
+        <th class="center">Box</th>
         <th class="center">Unit</th>
         <th class="right">Unit Price</th>
         <th class="center">GST</th>

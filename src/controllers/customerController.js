@@ -21,6 +21,21 @@ function normalizeEmail(value) {
   return normalizeText(value).toLowerCase();
 }
 
+function normalizeEmailList(value, primaryEmail = '') {
+  const seen = new Set();
+  const normalizedPrimary = normalizeEmail(primaryEmail);
+  const values = Array.isArray(value) ? value : String(value || '').split(/[,\n;\s]+/g);
+
+  return values
+    .map(normalizeEmail)
+    .filter(Boolean)
+    .filter((email) => {
+      if (email === normalizedPrimary || seen.has(email)) return false;
+      seen.add(email);
+      return true;
+    });
+}
+
 function escapeRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -311,6 +326,7 @@ exports.getCustomers = async (req, res) => {
         { name: { $regex: search, $options: 'i' } },
         { customerNumber: { $regex: search, $options: 'i' } },
         { email: { $regex: search, $options: 'i' } },
+        { ccEmails: { $regex: search, $options: 'i' } },
         { phone: { $regex: search, $options: 'i' } },
         { abn: { $regex: search, $options: 'i' } },
       ];
@@ -385,7 +401,9 @@ exports.getCustomer = async (req, res) => {
 
 exports.createCustomer = async (req, res) => {
   try {
-    const { name, phone, email, abn, address, notes } = req.body;
+    const { name, phone, email, ccEmails, abn, address, notes } = req.body;
+    const normalizedEmail = normalizeEmail(email);
+    const normalizedCcEmails = normalizeEmailList(ccEmails, normalizedEmail);
 
     if (!name || !phone) {
       return res.status(400).json({
@@ -394,8 +412,8 @@ exports.createCustomer = async (req, res) => {
       });
     }
 
-    if (email) {
-      const existingCustomer = await Customer.findOne({ email });
+    if (normalizedEmail) {
+      const existingCustomer = await Customer.findOne({ email: normalizedEmail });
       if (existingCustomer) {
         return res.status(400).json({
           success: false,
@@ -407,7 +425,8 @@ exports.createCustomer = async (req, res) => {
     const customerPayload = {
       name,
       phone,
-      email,
+      email: normalizedEmail || undefined,
+      ccEmails: normalizedCcEmails,
       abn,
       address,
       notes,
@@ -451,7 +470,8 @@ exports.createCustomer = async (req, res) => {
 
 exports.updateCustomer = async (req, res) => {
   try {
-    const { name, phone, email, abn, address, notes, status } = req.body;
+    const { name, phone, email, ccEmails, abn, address, notes, status } = req.body;
+    const normalizedEmail = email !== undefined ? normalizeEmail(email) : undefined;
 
     const customer = await Customer.findById(req.params.id);
 
@@ -462,8 +482,11 @@ exports.updateCustomer = async (req, res) => {
       });
     }
 
-    if (email && email !== customer.email) {
-      const existingCustomer = await Customer.findOne({ email });
+    const normalizedCcEmails =
+      ccEmails !== undefined ? normalizeEmailList(ccEmails, normalizedEmail ?? customer.email) : undefined;
+
+    if (normalizedEmail && normalizedEmail !== customer.email) {
+      const existingCustomer = await Customer.findOne({ email: normalizedEmail });
       if (existingCustomer) {
         return res.status(400).json({
           success: false,
@@ -474,7 +497,8 @@ exports.updateCustomer = async (req, res) => {
 
     customer.name = name || customer.name;
     customer.phone = phone || customer.phone;
-    customer.email = email !== undefined ? email : customer.email;
+    customer.email = normalizedEmail !== undefined ? normalizedEmail : customer.email;
+    customer.ccEmails = normalizedCcEmails !== undefined ? normalizedCcEmails : customer.ccEmails;
     customer.abn = abn !== undefined ? abn : customer.abn;
     customer.address = address || customer.address;
     customer.notes = notes !== undefined ? notes : customer.notes;

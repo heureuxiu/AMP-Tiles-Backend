@@ -502,7 +502,7 @@ exports.getQuotations = async (req, res) => {
     
     const quotations = await Quotation.find(query)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku description size')
+      .populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit')
       .sort(sortBy);
 
     // Calculate statistics
@@ -539,7 +539,7 @@ exports.getQuotation = async (req, res) => {
   try {
     const quotation = await Quotation.findById(req.params.id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku description size image price unit')
+      .populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit image price unit')
       .populate('invoiceId', 'invoiceNumber');
 
     if (!quotation) {
@@ -578,7 +578,7 @@ exports.getQuotationForResponse = async (req, res) => {
       .select(
         'quotationNumber customerName customerEmail customerPhone customerAddress deliveryAddress quotationDate validUntil items subtotal discount discountType tax taxRate deliveryCost grandTotal status clientResponseRemarks clientRespondedAt'
       )
-      .populate('items.product', 'name sku description size');
+      .populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit');
 
     if (!quotation) {
       return res.status(404).json({
@@ -631,7 +631,7 @@ exports.respondToQuotation = async (req, res) => {
 
     const quotation = await Quotation.findOne({ responseToken: token })
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku description size');
+      .populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit');
 
     if (!quotation) {
       return res.status(404).json({
@@ -690,7 +690,7 @@ exports.sendQuotationEmail = async (req, res) => {
   try {
     const quotation = await Quotation.findById(req.params.id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku description size');
+      .populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit');
 
     if (!quotation) {
       return res.status(404).json({
@@ -733,7 +733,7 @@ exports.sendQuotationEmail = async (req, res) => {
       quotation.status = 'sent';
       await quotation.save();
       await quotation.populate('createdBy', 'name email');
-      await quotation.populate('items.product', 'name sku description size');
+      await quotation.populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit');
     }
 
     res.status(200).json({
@@ -761,7 +761,7 @@ exports.getQuotationPdf = async (req, res) => {
   try {
     const quotation = await Quotation.findById(req.params.id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku description size')
+      .populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit')
       .lean();
 
     if (!quotation) {
@@ -1342,7 +1342,7 @@ exports.createQuotation = async (req, res) => {
     });
 
     await quotation.populate('createdBy', 'name email');
-    await quotation.populate('items.product', 'name sku description size');
+    await quotation.populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit');
 
     let emailSent = false;
     let emailError = null;
@@ -1360,7 +1360,7 @@ exports.createQuotation = async (req, res) => {
           quotation.status = 'sent';
           await quotation.save();
           await quotation.populate('createdBy', 'name email');
-          await quotation.populate('items.product', 'name sku description size');
+          await quotation.populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit');
         }
       } catch (error) {
         emailError = summarizeEmailError(error);
@@ -1549,7 +1549,7 @@ exports.updateQuotation = async (req, res) => {
 
     // Populate references
     await quotation.populate('createdBy', 'name email');
-    await quotation.populate('items.product', 'name sku description size');
+    await quotation.populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit');
 
     res.status(200).json({
       success: true,
@@ -1602,7 +1602,7 @@ exports.deleteQuotation = async (req, res) => {
 exports.convertToInvoice = async (req, res) => {
   try {
     const quotation = await Quotation.findById(req.params.id)
-      .populate('items.product', 'name sku description size');
+      .populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit');
 
     if (!quotation) {
       return res.status(404).json({
@@ -1695,7 +1695,7 @@ exports.convertToInvoice = async (req, res) => {
 
     const populatedInvoice = await Invoice.findById(invoice._id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku description size')
+      .populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit')
       .populate('quotation', 'quotationNumber');
 
     res.status(200).json({

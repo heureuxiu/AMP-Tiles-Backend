@@ -1024,7 +1024,7 @@ exports.createInvoice = async (req, res) => {
 
     const populatedInvoice = await Invoice.findById(invoice._id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku description size')
+      .populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit')
       .populate('quotation', 'quotationNumber');
 
     let emailSent = false;
@@ -1185,7 +1185,7 @@ exports.updateInvoice = async (req, res) => {
 
     const updatedInvoice = await Invoice.findById(invoice._id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku description size')
+      .populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit')
       .populate('quotation', 'quotationNumber');
 
     let emailSent = false;
@@ -1253,7 +1253,7 @@ exports.markInvoiceAsPaid = async (req, res) => {
 
     const updatedInvoice = await Invoice.findById(invoice._id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku description size')
+      .populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit')
       .populate('quotation', 'quotationNumber');
 
     let emailSent = false;
@@ -1299,7 +1299,7 @@ exports.sendInvoiceEmail = async (req, res) => {
   try {
     const invoice = await Invoice.findById(req.params.id)
       .populate('createdBy', 'name email')
-      .populate('items.product', 'name sku description size')
+      .populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit')
       .populate('quotation', 'quotationNumber');
 
     if (!invoice) {
@@ -1348,7 +1348,7 @@ exports.getInvoicePdf = async (req, res) => {
   try {
     const invoice = await Invoice.findById(req.params.id)
       .populate('quotation', 'quotationNumber')
-      .populate('items.product', 'name sku size')
+      .populate('items.product', 'name sku size coveragePerBox coveragePerBoxUnit')
       .lean();
     if (!invoice) {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
@@ -1375,7 +1375,7 @@ exports.getInvoicePdf = async (req, res) => {
 exports.getPackingSlipPdf = async (req, res) => {
   try {
     const invoice = await Invoice.findById(req.params.id)
-      .populate('items.product', 'name sku size')
+      .populate('items.product', 'name sku size coveragePerBox coveragePerBoxUnit')
       .lean();
     if (!invoice) {
       return res.status(404).json({ success: false, message: 'Invoice not found' });

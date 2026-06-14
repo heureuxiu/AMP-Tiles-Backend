@@ -26,6 +26,24 @@ const customerSchema = new mongoose.Schema(
         'Please provide a valid email',
       ],
     },
+    ccEmails: {
+      type: [String],
+      default: [],
+      set: (emails) =>
+        Array.isArray(emails)
+          ? emails
+              .map((email) => String(email || '').trim().toLowerCase())
+              .filter(Boolean)
+          : [],
+      validate: {
+        validator(emails) {
+          return (emails || []).every((email) =>
+            /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/.test(email)
+          );
+        },
+        message: 'Please provide valid CC email addresses',
+      },
+    },
     abn: {
       type: String,
       trim: true,
@@ -89,6 +107,7 @@ customerSchema.pre('save', async function () {
 
 customerSchema.index({ name: 1 });
 customerSchema.index({ email: 1 });
+customerSchema.index({ ccEmails: 1 });
 customerSchema.index({ abn: 1 });
 customerSchema.index({ status: 1 });
 customerSchema.index({ createdAt: -1 });

@@ -103,13 +103,20 @@ function buildInvoiceEmail(invoice) {
       : payment.paymentStatus === 'partially_paid'
         ? 'Partially Paid'
         : 'Unpaid';
+  const isFinalReceipt = payment.paymentStatus === 'paid';
+  const introMessage = isFinalReceipt
+    ? 'Thank you for the payment.'
+    : 'Thank you for accepting our quote.';
+  const summaryMessage = isFinalReceipt
+    ? 'Please find below a summary of the attached invoice for your reference.'
+    : 'Please find below a summary of the attached invoice for your reference. We kindly request that payment be made by the due date stated on the invoice.';
 
   const text = [
     'Dear Customer,',
     '',
-    'Thank you for accepting our quote.',
+    introMessage,
     '',
-    'Please find below a summary of the attached invoice for your reference. We kindly request that payment be made by the due date stated on the invoice.',
+    summaryMessage,
     '',
     `Invoice Date: ${formatDate(invoice.invoiceDate)}`,
     `Due Date: ${invoice.dueDate ? formatDate(invoice.dueDate) : 'N/A'}`,
@@ -135,8 +142,8 @@ function buildInvoiceEmail(invoice) {
   const html = `
     <div style="font-family: Arial, sans-serif; color: #111827; line-height: 1.45;">
       <p>Dear Customer,</p>
-      <p>Thank you for accepting our quote.</p>
-      <p>Please find below a summary of the attached invoice for your reference. We kindly request that payment be made by the due date stated on the invoice.</p>
+      <p>${escapeHtml(introMessage)}</p>
+      <p>${escapeHtml(summaryMessage)}</p>
       <p>
         <strong>Invoice Date:</strong> ${escapeHtml(formatDate(invoice.invoiceDate))}<br/>
         <strong>Due Date:</strong> ${escapeHtml(invoice.dueDate ? formatDate(invoice.dueDate) : 'N/A')}<br/>
@@ -162,7 +169,7 @@ function buildInvoiceEmail(invoice) {
     subject: `Invoice ${invoiceNo} from ${COMPANY_DETAILS.name}`,
     text,
     html,
-    isFinalReceipt: payment.paymentStatus === 'paid',
+    isFinalReceipt,
     paymentStatus: payment.paymentStatus,
   };
 }

@@ -76,6 +76,27 @@ function getDisplayQuantity(item) {
   return formatQuantity(item?.quantity ?? 0);
 }
 
+function getCoveragePerBoxSqm(item) {
+  const coveragePerBox = Number(item?.product?.coveragePerBox) || 0;
+  if (coveragePerBox <= 0) return 0;
+  return String(item?.product?.coveragePerBoxUnit || '').toLowerCase() === 'sqm'
+    ? coveragePerBox
+    : coveragePerBox / SQFT_PER_SQM;
+}
+
+function getDisplayBoxes(item) {
+  const unitType = String(item?.unitType || '').toLowerCase();
+  const quantity = Number(item?.quantity) || 0;
+  if (unitType.includes('box')) return formatQuantity(quantity);
+
+  const coverageSqm = Number(item?.coverageSqm);
+  const perBoxSqm = getCoveragePerBoxSqm(item);
+  if (Number.isFinite(coverageSqm) && coverageSqm > 0 && perBoxSqm > 0) {
+    return formatQuantity(Math.ceil(coverageSqm / perBoxSqm));
+  }
+  return '-';
+}
+
 function getDisplayUnit(item) {
   const unitType = String(item?.unitType || '').trim().toLowerCase();
   if (unitType === 'sqm' || unitType === 'sq meter') return 'sqm';
@@ -137,6 +158,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
       <td>${escapeHtml(getItemSize(item))}</td>
       <td>${escapeHtml(getDisplayUnit(item))}</td>
       <td class="center">${escapeHtml(getDisplayQuantity(item))}</td>
+      <td class="center">${escapeHtml(getDisplayBoxes(item))}</td>
       <td class="right">${formatNumber(item.rate)}</td>
       <td class="center">${item.discountPercent != null && item.discountPercent > 0 ? item.discountPercent + '%' : '-'}</td>
       <td class="center">${item.taxPercent != null ? item.taxPercent + '%' : (quote.taxRate != null ? quote.taxRate + '%' : '10%')}</td>
@@ -192,6 +214,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
       <td></td>
       <td></td>
       <td class="center">1</td>
+      <td class="center">-</td>
       <td class="right">${formatNumber(deliveryCost)}</td>
       <td class="center">-</td>
       <td class="center">${DELIVERY_GST_RATE}%</td>
@@ -444,6 +467,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
         <th>Size</th>
         <th>Unit</th>
         <th class="center">Quantity</th>
+        <th class="center">Box</th>
         <th class="right">Unit Price</th>
         <th class="center">Disc%</th>
         <th class="center">GST</th>

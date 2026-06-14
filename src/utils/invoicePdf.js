@@ -72,6 +72,27 @@
     return formatQuantity(item?.quantity ?? 0);
   }
 
+  function getCoveragePerBoxSqm(item) {
+    const coveragePerBox = Number(item?.product?.coveragePerBox) || 0;
+    if (coveragePerBox <= 0) return 0;
+    return String(item?.product?.coveragePerBoxUnit || '').toLowerCase() === 'sqm'
+      ? coveragePerBox
+      : coveragePerBox / SQFT_PER_SQM;
+  }
+
+  function getDisplayBoxes(item) {
+    const unitType = String(item?.unitType || '').toLowerCase();
+    const quantity = Number(item?.quantity) || 0;
+    if (unitType.includes('box')) return formatQuantity(quantity);
+
+    const coverageSqm = Number(item?.coverageSqm);
+    const perBoxSqm = getCoveragePerBoxSqm(item);
+    if (Number.isFinite(coverageSqm) && coverageSqm > 0 && perBoxSqm > 0) {
+      return formatQuantity(Math.ceil(coverageSqm / perBoxSqm));
+    }
+    return '-';
+  }
+
   function getItemSize(item) {
     const rawSize = item?.product?.size ?? item?.size;
     return rawSize ? String(rawSize) : '';
@@ -135,6 +156,7 @@
         <td>${escapeHtml(getItemSize(item))}</td>
         <td>${escapeHtml(getDisplayUnit(item))}</td>
         <td class="center">${escapeHtml(getDisplayQuantity(item))}</td>
+        <td class="center">${escapeHtml(getDisplayBoxes(item))}</td>
         <td class="right">${formatNumber(item.rate)}</td>
         <td class="center">${item.discountPercent != null && item.discountPercent > 0 ? item.discountPercent + '%' : '-'}</td>
         <td class="center">${item.taxPercent != null ? item.taxPercent + '%' : taxRate + '%'}</td>
@@ -181,6 +203,7 @@
         <td></td>
         <td></td>
         <td class="center">1</td>
+        <td class="center">-</td>
         <td class="right">${formatNumber(deliveryCost)}</td>
         <td class="center">-</td>
         <td class="center">${taxRate}%</td>
@@ -502,6 +525,7 @@
           <th>SIZE</th>
           <th>UNIT</th>
           <th class="center">QUANTITY</th>
+          <th class="center">BOX</th>
           <th class="right">RATE</th>
           <th class="center">DISC%</th>
           <th class="center">GST</th>
