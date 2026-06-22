@@ -829,7 +829,15 @@ async function sendInvoiceEmailWithAttachment(invoiceDoc, options = {}) {
 // @access  Private
 exports.getInvoices = async (req, res) => {
   try {
-    const { search, status, startDate, endDate, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
+    const {
+      search,
+      status,
+      startDate,
+      endDate,
+      sortBy = 'createdAt',
+      sortOrder = 'desc',
+      limit,
+    } = req.query;
     const query = {};
 
     if (search) {
@@ -849,10 +857,18 @@ exports.getInvoices = async (req, res) => {
 
     const sort = {};
     sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
-    const invoices = await Invoice.find(query)
+    const maxLimit = Math.min(Math.max(Number(limit) || 0, 0), 100);
+
+    let invoicesQuery = Invoice.find(query)
       .populate('createdBy', 'name email')
       .populate('items.product', 'name sku description size retailPrice price coveragePerBox coveragePerBoxUnit')
       .sort(sort);
+
+    if (maxLimit > 0) {
+      invoicesQuery = invoicesQuery.limit(maxLimit);
+    }
+
+    const invoices = await invoicesQuery;
 
     // Recompute grandTotal / remainingBalance from line items so stale DB values don't reach the client
     const correctedInvoices = invoices.map(inv => {

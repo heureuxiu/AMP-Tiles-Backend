@@ -1,6 +1,31 @@
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
 
+const parseTokenLifetime = (value) => {
+  if (!value) return 7 * 24 * 60 * 60 * 1000;
+  if (/^\d+$/.test(String(value))) return Number(value) * 1000;
+
+  const match = String(value).trim().match(/^(\d+)\s*([smhd])$/i);
+  if (!match) return 7 * 24 * 60 * 60 * 1000;
+
+  const amount = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  const multipliers = {
+    s: 1000,
+    m: 60 * 1000,
+    h: 60 * 60 * 1000,
+    d: 24 * 60 * 60 * 1000,
+  };
+
+  return amount * multipliers[unit];
+};
+
+const getTokenCookieOptions = () => ({
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'strict',
+});
+
 // Generate JWT Token
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -15,12 +40,8 @@ const sendTokenResponse = (user, statusCode, res) => {
 
   // Cookie options
   const options = {
-    expires: new Date(
-      Date.now() + 7 * 24 * 60 * 60 * 1000 // 7 days
-    ),
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production', // Use secure cookies in production
-    sameSite: 'strict',
+    ...getTokenCookieOptions(),
+    maxAge: parseTokenLifetime(process.env.JWT_EXPIRE),
   };
 
   res.status(statusCode).cookie('token', token, options).json({
@@ -207,10 +228,7 @@ exports.updatePassword = async (req, res) => {
 // @route   POST /api/auth/logout
 // @access  Private
 exports.logout = async (req, res) => {
-  res.cookie('token', 'none', {
-    expires: new Date(Date.now() + 10 * 1000),
-    httpOnly: true,
-  });
+  res.clearCookie('token', getTokenCookieOptions());
 
   res.status(200).json({
     success: true,

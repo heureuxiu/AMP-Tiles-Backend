@@ -64,6 +64,7 @@ app.use(cookieParser());
 
 // Mount routes
 app.use("/api/auth", require("./routes/authRoutes"));
+app.use("/api/dashboard", require("./routes/dashboardRoutes"));
 app.use("/api/products", require("./routes/productRoutes"));
 app.use("/api/stock", require("./routes/stockRoutes"));
 app.use("/api/quotations", require("./routes/quotationRoutes"));

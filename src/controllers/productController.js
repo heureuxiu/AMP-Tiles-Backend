@@ -222,7 +222,18 @@ async function resolveSupplierDocument({ supplierId, supplierName, fallbackSuppl
 // @access  Private
 exports.getProducts = async (req, res) => {
   try {
-    const { search, category, finish, status, supplierName, supplier, supplierType } = req.query;
+    const {
+      search,
+      category,
+      finish,
+      status,
+      supplierName,
+      supplier,
+      supplierType,
+      sortBy = 'createdAt',
+      sortOrder = 'desc',
+      limit,
+    } = req.query;
 
     const conditions = [];
 
@@ -294,10 +305,20 @@ exports.getProducts = async (req, res) => {
           ? conditions[0]
           : { $and: conditions };
 
-    const products = await Product.find(query)
+    const maxLimit = Math.min(Math.max(Number(limit) || 0, 0), 100);
+    const sort = {};
+    sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
+
+    let productsQuery = Product.find(query)
       .populate('createdBy', 'name email')
       .populate('supplier', 'name supplierNumber')
-      .sort({ createdAt: -1 });
+      .sort(sort);
+
+    if (maxLimit > 0) {
+      productsQuery = productsQuery.limit(maxLimit);
+    }
+
+    const products = await productsQuery;
 
     res.status(200).json({
       success: true,

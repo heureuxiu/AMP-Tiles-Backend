@@ -470,7 +470,15 @@ const SQFT_PER_SQM = 10.764;
 // @access  Private
 exports.getQuotations = async (req, res) => {
   try {
-    const { search, status, startDate, endDate, sortBy = '-createdAt' } = req.query;
+    const {
+      search,
+      status,
+      startDate,
+      endDate,
+      sortBy = 'createdAt',
+      sortOrder = 'desc',
+      limit,
+    } = req.query;
     
     // Build query
     const query = {};
@@ -500,10 +508,20 @@ exports.getQuotations = async (req, res) => {
       }
     }
     
-    const quotations = await Quotation.find(query)
+    const sort = {};
+    sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
+    const maxLimit = Math.min(Math.max(Number(limit) || 0, 0), 100);
+
+    let quotationsQuery = Quotation.find(query)
       .populate('createdBy', 'name email')
       .populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit')
-      .sort(sortBy);
+      .sort(sort);
+
+    if (maxLimit > 0) {
+      quotationsQuery = quotationsQuery.limit(maxLimit);
+    }
+
+    const quotations = await quotationsQuery;
 
     // Calculate statistics
     const stats = {
@@ -1796,4 +1814,3 @@ exports.getQuotationStats = async (req, res) => {
     });
   }
 };
-
