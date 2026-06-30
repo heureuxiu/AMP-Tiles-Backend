@@ -1,6 +1,6 @@
 const fs = require('fs');
 const { readLogoBase64 } = require('./logoResolver');
-const { getPuppeteer, launchPuppeteerBrowser } = require('./puppeteerLauncher');
+const { getPuppeteer, getReusablePuppeteerBrowser } = require('./puppeteerLauncher');
 
 function escapeHtml(text) {
   if (text == null) return '';
@@ -121,6 +121,10 @@ function getDeliveryAddress(source) {
   return String(source?.deliveryAddress || source?.customerAddress || '').trim();
 }
 
+function getBillingAddress(source) {
+  return String(source?.billingAddress || source?.customerAddress || '').trim();
+}
+
 function getLineTotalExGst(item) {
   const base = (Number(item?.quantity) || 0) * (Number(item?.rate) || 0);
   const discountPercent = Number(item?.discountPercent) || 0;
@@ -147,6 +151,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
 
   const logoSrc = getLogoBase64();
   const quote = quotation;
+  const billingAddress = getBillingAddress(quote);
   const deliveryAddress = getDeliveryAddress(quote);
 
   const rowsHtml = (quote.items || [])
@@ -419,6 +424,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
   <div class="header-grid">
     <div class="customer-block">
       <p class="cust-name">${escapeHtml(quote.customerName || '')}</p>
+      ${billingAddress ? `<p><strong>Billing Address:</strong> ${escapeHtml(billingAddress)}</p>` : ''}
       ${deliveryAddress ? `<p><strong>Delivery Address:</strong> ${escapeHtml(deliveryAddress)}</p>` : ''}
       ${quote.customerPhone ? `<p>${escapeHtml(quote.customerPhone)}</p>` : ''}
       ${quote.customerEmail ? `<p>${escapeHtml(quote.customerEmail)}</p>` : ''}
@@ -488,7 +494,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
         <td class="t-value">${formatNumber(subtotal)}</td>
       </tr>
       <tr>
-        <td class="t-label">Total GST</td>
+        <td class="t-label">Total GST ${taxRate}%</td>
         <td class="t-value">${formatNumber(totalGst)}</td>
       </tr>
       <tr class="grand-row">
@@ -517,13 +523,14 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
 }
 
 async function generateQuotationPdf(quotation) {
+  const startedAt = Date.now();
   const puppeteer = getPuppeteer();
   const html = buildQuotationHtml(quotation);
-  let browser;
+  let page;
   try {
-    browser = await launchPuppeteerBrowser(puppeteer);
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0' });
+    const browser = await getReusablePuppeteerBrowser(puppeteer);
+    page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'domcontentloaded' });
     const pdfBuffer = await page.pdf({
       format: 'A4',
       printBackground: true,
@@ -531,7 +538,8 @@ async function generateQuotationPdf(quotation) {
     });
     return Buffer.from(pdfBuffer);
   } finally {
-    if (browser) await browser.close();
+    if (page) await page.close().catch(() => {});
+    console.log(`Quotation PDF generated in ${Date.now() - startedAt}ms`);
   }
 }
 

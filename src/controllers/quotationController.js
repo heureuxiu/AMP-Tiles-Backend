@@ -5,6 +5,12 @@ const Product = require('../models/Product');
 const Invoice = require('../models/Invoice');
 const StockTransaction = require('../models/StockTransaction');
 const { generateQuotationPdf } = require('../utils/quotationPdf');
+const { buildEmailAttachments } = require('../middleware/emailAttachments');
+const {
+  saveUploadedAttachments,
+  removeStoredAttachments,
+  buildStoredEmailAttachments,
+} = require('../utils/recordAttachments');
 
 function escapeHtml(value) {
   return String(value || '')
@@ -430,6 +436,8 @@ async function sendQuotationEmailWithAttachment(quotationDoc, options = {}) {
   const ccEmails = parseEmailList(options.ccEmails);
 
   const pdfBuffer = await generateQuotationPdf(quotation);
+  const extraAttachments = Array.isArray(options.extraAttachments) ? options.extraAttachments : [];
+  const storedAttachments = await buildStoredEmailAttachments(quotation.attachments);
   const emailPayload = appendQuotationResponseLink(
     buildQuotationEmail(quotation),
     buildQuotationResponseUrl(quotation.responseToken, options.req)
@@ -451,6 +459,8 @@ async function sendQuotationEmailWithAttachment(quotationDoc, options = {}) {
          content: pdfBuffer.toString('base64'),
          contentType: 'application/pdf',
       },
+      ...storedAttachments,
+      ...extraAttachments,
     ],
   });
 
@@ -477,6 +487,7 @@ exports.getQuotations = async (req, res) => {
       endDate,
       sortBy = 'createdAt',
       sortOrder = 'desc',
+      page,
       limit,
     } = req.query;
     
@@ -510,35 +521,49 @@ exports.getQuotations = async (req, res) => {
     
     const sort = {};
     sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
-    const maxLimit = Math.min(Math.max(Number(limit) || 0, 0), 100);
+    const shouldPaginate = page !== undefined || limit !== undefined;
+    const maxLimit = Math.min(Math.max(Number(limit) || 10, 1), 100);
+    const currentPage = Math.max(Number(page) || 1, 1);
+    const skip = (currentPage - 1) * maxLimit;
 
     let quotationsQuery = Quotation.find(query)
       .populate('createdBy', 'name email')
       .populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit')
       .sort(sort);
 
-    if (maxLimit > 0) {
-      quotationsQuery = quotationsQuery.limit(maxLimit);
+    if (shouldPaginate) {
+      quotationsQuery = quotationsQuery.skip(skip).limit(maxLimit);
     }
 
-    const quotations = await quotationsQuery;
+    const [quotations, total, statsSource] = await Promise.all([
+      quotationsQuery,
+      Quotation.countDocuments(query),
+      Quotation.find(query).select('status grandTotal').lean(),
+    ]);
 
     // Calculate statistics
     const stats = {
-      total: quotations.length,
-      draft: quotations.filter(q => q.status === 'draft').length,
-      sent: quotations.filter(q => q.status === 'sent').length,
-      accepted: quotations.filter(q => q.status === 'accepted').length,
-      rejected: quotations.filter(q => q.status === 'rejected').length,
-      converted: quotations.filter(q => q.status === 'converted').length,
-      expired: quotations.filter(q => q.status === 'expired').length,
-      cancelled: quotations.filter(q => q.status === 'cancelled').length,
-      totalValue: quotations.reduce((sum, q) => sum + q.grandTotal, 0),
+      total,
+      draft: statsSource.filter(q => q.status === 'draft').length,
+      sent: statsSource.filter(q => q.status === 'sent').length,
+      accepted: statsSource.filter(q => q.status === 'accepted').length,
+      rejected: statsSource.filter(q => q.status === 'rejected').length,
+      converted: statsSource.filter(q => q.status === 'converted').length,
+      expired: statsSource.filter(q => q.status === 'expired').length,
+      cancelled: statsSource.filter(q => q.status === 'cancelled').length,
+      totalValue: statsSource.reduce((sum, q) => sum + (Number(q.grandTotal) || 0), 0),
     };
 
     res.status(200).json({
       success: true,
       count: quotations.length,
+      total,
+      pagination: {
+        page: currentPage,
+        limit: shouldPaginate ? maxLimit : total,
+        total,
+        totalPages: shouldPaginate ? Math.max(Math.ceil(total / maxLimit), 1) : 1,
+      },
       stats,
       quotations,
     });
@@ -594,7 +619,7 @@ exports.getQuotationForResponse = async (req, res) => {
 
     const quotation = await Quotation.findOne({ responseToken: token })
       .select(
-        'quotationNumber customerName customerEmail customerPhone customerAddress deliveryAddress quotationDate validUntil items subtotal discount discountType tax taxRate deliveryCost grandTotal status clientResponseRemarks clientRespondedAt'
+        'quotationNumber customerName customerEmail customerPhone customerAddress billingAddress deliveryAddress quotationDate validUntil items subtotal discount discountType tax taxRate deliveryCost grandTotal status clientResponseRemarks clientRespondedAt'
       )
       .populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit');
 
@@ -745,6 +770,7 @@ exports.sendQuotationEmail = async (req, res) => {
       req,
       toEmail: customerEmail,
       ccEmails,
+      extraAttachments: buildEmailAttachments(req.files),
     });
 
     if (quotation.status !== 'sent') {
@@ -1265,6 +1291,7 @@ exports.createQuotation = async (req, res) => {
       customerName,
       customerPhone,
       customerEmail,
+      billingAddress,
       customerAddress,
       deliveryAddress,
       reference,
@@ -1331,14 +1358,18 @@ exports.createQuotation = async (req, res) => {
 
     const primaryEmail = normalizedPrimaryEmail || normalizedCustomerEmails[0] || undefined;
     const ccEmails = normalizedCustomerEmails.filter((email) => email !== primaryEmail);
+    const normalizedBillingAddress = String(billingAddress || customerAddress || '').trim();
+    const normalizedDeliveryAddress = String(deliveryAddress || normalizedBillingAddress || '').trim();
 
     const quotation = await Quotation.create({
       customerName,
       customerPhone,
       customerEmail: primaryEmail,
       customerCcEmails: ccEmails,
-      customerAddress,
-      deliveryAddress: String(deliveryAddress || customerAddress || '').trim() || undefined,
+      customerAddress: normalizedBillingAddress || undefined,
+      billingAddress: normalizedBillingAddress || undefined,
+      deliveryAddress: normalizedDeliveryAddress || undefined,
+      attachments: await saveUploadedAttachments(req.files),
       reference: String(reference || '').trim() || undefined,
       quotationDate: quotationDate || Date.now(),
       validUntil,
@@ -1371,6 +1402,7 @@ exports.createQuotation = async (req, res) => {
           req,
           toEmail: primaryEmail,
           ccEmails,
+          extraAttachments: buildEmailAttachments(req.files),
         });
         emailSent = true;
 
@@ -1453,6 +1485,7 @@ exports.updateQuotation = async (req, res) => {
       customerPhone,
       customerEmail,
       customerCcEmails,
+      billingAddress,
       customerAddress,
       deliveryAddress,
       reference,
@@ -1466,6 +1499,7 @@ exports.updateQuotation = async (req, res) => {
       notes,
       terms,
       status,
+      retainedAttachmentIds,
     } = req.body;
 
     const nextStatus = status || quotation.status;
@@ -1481,6 +1515,20 @@ exports.updateQuotation = async (req, res) => {
     const shouldValidateStock =
       (items && items.length > 0) || (status && isHoldingQuotationStatus(nextStatus));
     let validatedProductMap = null;
+    const hasAttachmentUpdate =
+      Array.isArray(retainedAttachmentIds) || (Array.isArray(req.files) && req.files.length > 0);
+    const retainedIds = new Set(
+      (Array.isArray(retainedAttachmentIds) ? retainedAttachmentIds : [])
+        .map((value) => String(value))
+        .filter(Boolean)
+    );
+    const existingAttachments = Array.isArray(quotation.attachments) ? quotation.attachments : [];
+    const retainedAttachments = hasAttachmentUpdate
+      ? existingAttachments.filter((attachment) => retainedIds.has(String(attachment._id)))
+      : existingAttachments;
+    const removedAttachments = hasAttachmentUpdate
+      ? existingAttachments.filter((attachment) => !retainedIds.has(String(attachment._id)))
+      : [];
 
     if (shouldValidateStock) {
       const itemsToValidate = items && items.length > 0 ? items : quotation.items;
@@ -1541,7 +1589,13 @@ exports.updateQuotation = async (req, res) => {
         (email) => email !== effectivePrimaryEmail
       );
     }
-    if (customerAddress !== undefined) quotation.customerAddress = customerAddress;
+    if (billingAddress !== undefined || customerAddress !== undefined) {
+      const nextBillingAddress = String(
+        billingAddress !== undefined ? billingAddress : customerAddress
+      ).trim();
+      quotation.customerAddress = nextBillingAddress;
+      quotation.billingAddress = nextBillingAddress;
+    }
     if (deliveryAddress !== undefined) quotation.deliveryAddress = deliveryAddress;
     if (reference !== undefined) {
       quotation.reference = String(reference || '').trim() || undefined;
@@ -1554,6 +1608,10 @@ exports.updateQuotation = async (req, res) => {
       quotation.deliveryCost = normalizeDeliveryCost(deliveryCost);
     }
     if (status) quotation.status = status;
+    if (hasAttachmentUpdate) {
+      const uploadedAttachments = await saveUploadedAttachments(req.files);
+      quotation.attachments = [...retainedAttachments, ...uploadedAttachments];
+    }
 
     quotation.deliveryCost = normalizeDeliveryCost(quotation.deliveryCost);
     quotation.grandTotal = calculateQuotationGrandTotal({
@@ -1568,6 +1626,7 @@ exports.updateQuotation = async (req, res) => {
     // Populate references
     await quotation.populate('createdBy', 'name email');
     await quotation.populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit');
+    await removeStoredAttachments(removedAttachments);
 
     res.status(200).json({
       success: true,
@@ -1600,6 +1659,7 @@ exports.deleteQuotation = async (req, res) => {
       await Invoice.findByIdAndUpdate(quotation.invoiceId, { $unset: { quotation: 1 } });
     }
 
+    await removeStoredAttachments(quotation.attachments);
     await quotation.deleteOne();
 
     res.status(200).json({

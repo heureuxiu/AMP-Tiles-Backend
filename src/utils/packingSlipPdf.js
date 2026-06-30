@@ -1,6 +1,6 @@
 const fs = require('fs');
 const { readLogoBase64 } = require('./logoResolver');
-const { getPuppeteer, launchPuppeteerBrowser } = require('./puppeteerLauncher');
+const { getPuppeteer, getReusablePuppeteerBrowser } = require('./puppeteerLauncher');
 
 function escapeHtml(text) {
   if (text == null) return '';
@@ -208,12 +208,14 @@ function buildPackingSlipHtml(invoice) {
 }
 
 async function generatePackingSlipPdf(invoice) {
+  const startedAt = Date.now();
   const html = buildPackingSlipHtml(invoice);
   const puppeteer = getPuppeteer();
-  const browser = await launchPuppeteerBrowser(puppeteer);
+  let page;
   try {
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0' });
+    const browser = await getReusablePuppeteerBrowser(puppeteer);
+    page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'domcontentloaded' });
     const pdfBuffer = await page.pdf({
       format: 'A4',
       printBackground: true,
@@ -222,7 +224,8 @@ async function generatePackingSlipPdf(invoice) {
     // Normalize to Node Buffer so HTTP response sends valid binary PDF bytes.
     return Buffer.from(pdfBuffer);
   } finally {
-    await browser.close();
+    if (page) await page.close().catch(() => {});
+    console.log(`Packing slip PDF generated in ${Date.now() - startedAt}ms`);
   }
 }
 

@@ -232,8 +232,15 @@ exports.getProducts = async (req, res) => {
       supplierType,
       sortBy = 'createdAt',
       sortOrder = 'desc',
+      page,
       limit,
     } = req.query;
+
+    const parseList = (value) =>
+      String(value || '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
 
     const conditions = [];
 
@@ -250,16 +257,23 @@ exports.getProducts = async (req, res) => {
 
     // Filter by category
     if (category) {
-      conditions.push({ category });
+      const categories = parseList(category);
+      conditions.push(categories.length > 1 ? { category: { $in: categories } } : { category });
     }
 
     // Filter by finish
     if (finish) {
-      conditions.push({ finish });
+      const finishes = parseList(finish);
+      conditions.push(finishes.length > 1 ? { finish: { $in: finishes } } : { finish });
     }
 
     if (supplierType && supplierType !== 'all') {
-      conditions.push({ supplierType });
+      const supplierTypes = parseList(supplierType).filter((value) => value !== 'all');
+      if (supplierTypes.length > 0) {
+        conditions.push(
+          supplierTypes.length > 1 ? { supplierType: { $in: supplierTypes } } : { supplierType }
+        );
+      }
     }
 
     // Filter by supplier id (preferred), with backward-compatible supplierName fallback
@@ -270,6 +284,13 @@ exports.getProducts = async (req, res) => {
           return res.status(200).json({
             success: true,
             count: 0,
+            total: 0,
+            pagination: {
+              page: Math.max(Number(req.query.page) || 1, 1),
+              limit: Math.min(Math.max(Number(req.query.limit) || 10, 1), 100),
+              total: 0,
+              totalPages: 1,
+            },
             products: [],
           });
         }
@@ -290,12 +311,14 @@ exports.getProducts = async (req, res) => {
     }
 
     // Filter by status (in stock, low stock, out of stock)
-    if (status === 'out-of-stock') {
-      conditions.push({ stock: 0 });
-    } else if (status === 'low-stock') {
-      conditions.push({ stock: { $gt: 0, $lte: 30 } });
-    } else if (status === 'in-stock') {
-      conditions.push({ stock: { $gt: 30 } });
+    if (status) {
+      const statuses = parseList(status);
+      const statusConditions = [];
+      if (statuses.includes('out-of-stock')) statusConditions.push({ stock: 0 });
+      if (statuses.includes('low-stock')) statusConditions.push({ stock: { $gt: 0, $lte: 30 } });
+      if (statuses.includes('in-stock')) statusConditions.push({ stock: { $gt: 30 } });
+      if (statusConditions.length === 1) conditions.push(statusConditions[0]);
+      if (statusConditions.length > 1) conditions.push({ $or: statusConditions });
     }
 
     const query =
@@ -305,24 +328,42 @@ exports.getProducts = async (req, res) => {
           ? conditions[0]
           : { $and: conditions };
 
-    const maxLimit = Math.min(Math.max(Number(limit) || 0, 0), 100);
+    const shouldPaginate = page !== undefined || limit !== undefined;
+    const maxLimit = Math.min(Math.max(Number(limit) || 10, 1), 100);
+    const currentPage = Math.max(Number(page) || 1, 1);
+    const skip = (currentPage - 1) * maxLimit;
     const sort = {};
     sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
 
     let productsQuery = Product.find(query)
-      .populate('createdBy', 'name email')
       .populate('supplier', 'name supplierNumber')
       .sort(sort);
 
-    if (maxLimit > 0) {
-      productsQuery = productsQuery.limit(maxLimit);
+    if (shouldPaginate) {
+      productsQuery = productsQuery.skip(skip).limit(maxLimit);
     }
 
-    const products = await productsQuery;
+    const [products, total, categories, finishes] = await Promise.all([
+      productsQuery,
+      Product.countDocuments(query),
+      Product.distinct('category'),
+      Product.distinct('finish'),
+    ]);
 
     res.status(200).json({
       success: true,
       count: products.length,
+      total,
+      pagination: {
+        page: currentPage,
+        limit: shouldPaginate ? maxLimit : total,
+        total,
+        totalPages: shouldPaginate ? Math.max(Math.ceil(total / maxLimit), 1) : 1,
+      },
+      facets: {
+        categories: categories.filter(Boolean).sort(),
+        finishes: finishes.filter(Boolean).sort(),
+      },
       products,
     });
   } catch (error) {

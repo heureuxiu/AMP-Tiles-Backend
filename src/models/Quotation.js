@@ -1,5 +1,17 @@
 const mongoose = require('mongoose');
 
+const attachmentSchema = new mongoose.Schema(
+  {
+    originalName: { type: String, required: true, trim: true },
+    storedName: { type: String, required: true, trim: true },
+    mimeType: { type: String, trim: true, default: '' },
+    size: { type: Number, default: 0, min: 0 },
+    url: { type: String, required: true, trim: true },
+    uploadedAt: { type: Date, default: Date.now },
+  },
+  { _id: true }
+);
+
 const quotationItemSchema = new mongoose.Schema({
   product: {
     type: mongoose.Schema.Types.ObjectId,
@@ -84,9 +96,17 @@ const quotationSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    billingAddress: {
+      type: String,
+      trim: true,
+    },
     deliveryAddress: {
       type: String,
       trim: true,
+    },
+    attachments: {
+      type: [attachmentSchema],
+      default: [],
     },
     quotationDate: {
       type: Date,

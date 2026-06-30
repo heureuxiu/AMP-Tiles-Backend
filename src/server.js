@@ -3,10 +3,12 @@ const dotenv = require("dotenv");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const http = require("http");
+const path = require("path");
 const connectDB = require("./config/database");
+const { closeReusablePuppeteerBrowser } = require("./utils/puppeteerLauncher");
 
 // Load env vars
-dotenv.config();
+dotenv.config({ path: path.join(__dirname, "../.env") });
 
 // Connect to database
 connectDB();
@@ -58,6 +60,7 @@ app.options("*", cors());
 // Body parser middleware
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
 // Cookie parser middleware
 app.use(cookieParser());
@@ -127,6 +130,19 @@ server.listen(PORT, () => {
     `Server running in ${process.env.NODE_ENV || "development"} mode on port ${PORT}`
   );
 });
+
+async function shutdown(signal) {
+  console.log(`${signal} received. Shutting down server...`);
+  server.close(async () => {
+    await closeReusablePuppeteerBrowser().catch((error) => {
+      console.error("Failed to close Puppeteer browser:", error);
+    });
+    process.exit(0);
+  });
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
 // Handle unhandled promise rejections
 process.on("unhandledRejection", (err) => {

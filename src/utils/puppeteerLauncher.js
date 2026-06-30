@@ -10,6 +10,7 @@ const INSTALL_TIMEOUT_MS = 5 * 60 * 1000;
 const INSTALL_MAX_BUFFER = 10 * 1024 * 1024;
 
 let installPromise = null;
+let browserPromise = null;
 
 // Known system Chrome paths per platform
 const SYSTEM_CHROME_PATHS = {
@@ -176,7 +177,41 @@ async function launchPuppeteerBrowser(puppeteer) {
   }
 }
 
+async function getReusablePuppeteerBrowser(puppeteer) {
+  if (browserPromise) {
+    try {
+      const browser = await browserPromise;
+      if (browser?.isConnected?.()) return browser;
+    } catch (_) {
+      browserPromise = null;
+    }
+  }
+
+  browserPromise = launchPuppeteerBrowser(puppeteer).catch((error) => {
+    browserPromise = null;
+    throw error;
+  });
+
+  const browser = await browserPromise;
+  browser.on('disconnected', () => {
+    browserPromise = null;
+  });
+  return browser;
+}
+
+async function closeReusablePuppeteerBrowser() {
+  if (!browserPromise) return;
+
+  const browser = await browserPromise.catch(() => null);
+  browserPromise = null;
+  if (browser?.isConnected?.()) {
+    await browser.close();
+  }
+}
+
 module.exports = {
   getPuppeteer,
   launchPuppeteerBrowser,
+  getReusablePuppeteerBrowser,
+  closeReusablePuppeteerBrowser,
 };

@@ -10,6 +10,7 @@ exports.getSuppliers = async (req, res) => {
       status,
       sortBy = 'createdAt',
       sortOrder = 'desc',
+      page,
       limit,
     } = req.query;
 
@@ -34,28 +35,42 @@ exports.getSuppliers = async (req, res) => {
     // Build sort object
     const sortObj = {};
     sortObj[sortBy] = sortOrder === 'asc' ? 1 : -1;
+    const shouldPaginate = page !== undefined || limit !== undefined;
+    const maxLimit = Math.min(Math.max(Number(limit) || 10, 1), 100);
+    const currentPage = Math.max(Number(page) || 1, 1);
+    const skip = (currentPage - 1) * maxLimit;
 
     // Execute query
     let suppliersQuery = Supplier.find(query)
       .populate('createdBy', 'name email')
       .sort(sortObj);
 
-    if (limit) {
-      suppliersQuery = suppliersQuery.limit(parseInt(limit));
+    if (shouldPaginate) {
+      suppliersQuery = suppliersQuery.skip(skip).limit(maxLimit);
     }
 
-    const suppliers = await suppliersQuery;
+    const [suppliers, total] = await Promise.all([
+      suppliersQuery,
+      Supplier.countDocuments(query),
+    ]);
 
     // Get stats
     const stats = {
-      total: await Supplier.countDocuments(),
-      active: await Supplier.countDocuments({ status: 'active' }),
-      inactive: await Supplier.countDocuments({ status: 'inactive' }),
+      total,
+      active: await Supplier.countDocuments({ ...query, status: 'active' }),
+      inactive: await Supplier.countDocuments({ ...query, status: 'inactive' }),
     };
 
     res.status(200).json({
       success: true,
       count: suppliers.length,
+      total,
+      pagination: {
+        page: currentPage,
+        limit: shouldPaginate ? maxLimit : total,
+        total,
+        totalPages: shouldPaginate ? Math.max(Math.ceil(total / maxLimit), 1) : 1,
+      },
       suppliers,
       stats,
     });

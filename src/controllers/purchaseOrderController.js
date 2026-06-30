@@ -378,6 +378,8 @@ exports.getPurchaseOrders = async (req, res) => {
       endDate,
       sortBy = 'createdAt',
       sortOrder = 'desc',
+      page,
+      limit,
     } = req.query;
 
     const query = {};
@@ -397,12 +399,22 @@ exports.getPurchaseOrders = async (req, res) => {
 
     const sortObj = {};
     sortObj[sortBy] = sortOrder === 'asc' ? 1 : -1;
+    const shouldPaginate = page !== undefined || limit !== undefined;
+    const maxLimit = Math.min(Math.max(Number(limit) || 10, 1), 100);
+    const currentPage = Math.max(Number(page) || 1, 1);
+    const skip = (currentPage - 1) * maxLimit;
 
-    const purchaseOrders = await PurchaseOrder.find(query)
+    let purchaseOrdersQuery = PurchaseOrder.find(query)
       .populate('supplier', 'name supplierNumber')
       .populate('createdBy', 'name email')
       .populate('items.product', 'name sku description size unit tilesPerBox coveragePerBox coveragePerBoxUnit')
       .sort(sortObj);
+
+    if (shouldPaginate) {
+      purchaseOrdersQuery = purchaseOrdersQuery.skip(skip).limit(maxLimit);
+    }
+
+    const purchaseOrders = await purchaseOrdersQuery;
 
     const statuses = [
       'draft',
@@ -414,18 +426,25 @@ exports.getPurchaseOrders = async (req, res) => {
       'cancelled',
     ];
     const stats = {
-      total: await PurchaseOrder.countDocuments(),
+      total: await PurchaseOrder.countDocuments(query),
       totalValue: 0,
     };
     for (const s of statuses) {
-      stats[s] = await PurchaseOrder.countDocuments({ status: s });
+      stats[s] = await PurchaseOrder.countDocuments({ ...query, status: s });
     }
-    const allOrders = await PurchaseOrder.find();
-    stats.totalValue = allOrders.reduce((sum, po) => sum + (po.grandTotal || 0), 0);
+    const valueOrders = await PurchaseOrder.find(query).select('grandTotal').lean();
+    stats.totalValue = valueOrders.reduce((sum, po) => sum + (Number(po.grandTotal) || 0), 0);
 
     res.status(200).json({
       success: true,
       count: purchaseOrders.length,
+      total: stats.total,
+      pagination: {
+        page: currentPage,
+        limit: shouldPaginate ? maxLimit : stats.total,
+        total: stats.total,
+        totalPages: shouldPaginate ? Math.max(Math.ceil(stats.total / maxLimit), 1) : 1,
+      },
       purchaseOrders,
       stats,
     });
@@ -1104,13 +1123,6 @@ exports.deletePurchaseOrder = async (req, res) => {
       });
     }
 
-    if (purchaseOrder.status !== 'draft') {
-      return res.status(400).json({
-        success: false,
-        message: 'Can only delete draft purchase orders',
-      });
-    }
-
     await purchaseOrder.deleteOne();
 
     res.status(200).json({
@@ -1164,5 +1176,3 @@ exports.getPurchaseOrderStats = async (req, res) => {
     });
   }
 };
-
-

@@ -165,5 +165,13 @@ productSchema.pre('save', function (next) {
 // Index for better search performance
 productSchema.index({ name: 'text', sku: 'text', category: 'text' });
 productSchema.index({ supplier: 1 });
+productSchema.index({ createdAt: -1 });
+productSchema.index({ category: 1 });
+productSchema.index({ finish: 1 });
+productSchema.index({ supplierType: 1 });
+productSchema.index({ stock: 1 });
+productSchema.index({ supplierType: 1, createdAt: -1 });
+productSchema.index({ supplier: 1, createdAt: -1 });
+productSchema.index({ category: 1, finish: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Product', productSchema);

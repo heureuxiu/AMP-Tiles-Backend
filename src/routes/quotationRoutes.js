@@ -1,6 +1,7 @@
 const express = require('express');
 const quotationController = require('../controllers/quotationController');
 const { protect } = require('../middleware/auth');
+const { uploadEmailAttachments } = require('../middleware/emailAttachments');
 
 const router = express.Router();
 
@@ -43,18 +44,18 @@ router.get('/stats/summary', getQuotationStats);
 router.get('/held-stock', getHeldStock);
 
 // Main CRUD routes
-router.route('/').get(getQuotations).post(createQuotation);
+router.route('/').get(getQuotations).post(uploadEmailAttachments, createQuotation);
 
 // PDF route (must be before /:id so /:id/pdf is matched)
 router.get('/:id/pdf', getQuotationPdf);
 
 // Send quotation email route
-router.post('/:id/send', sendQuotationEmail);
+router.post('/:id/send', uploadEmailAttachments, sendQuotationEmail);
 
 router
   .route('/:id')
   .get(getQuotation)
-  .put(updateQuotation)
+  .put(uploadEmailAttachments, updateQuotation)
   .delete(deleteQuotation);
 
 // Convert to invoice

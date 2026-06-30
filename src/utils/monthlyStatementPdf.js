@@ -1,5 +1,5 @@
 const { readLogoBase64 } = require('./logoResolver');
-const { getPuppeteer, launchPuppeteerBrowser } = require('./puppeteerLauncher');
+const { getPuppeteer, getReusablePuppeteerBrowser } = require('./puppeteerLauncher');
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -439,13 +439,14 @@ function buildMonthlyStatementHtml(statement) {
 }
 
 async function generateMonthlyStatementPdf(statement) {
+  const startedAt = Date.now();
   const puppeteer = getPuppeteer();
   const html = buildMonthlyStatementHtml(statement);
-  let browser;
+  let page;
   try {
-    browser = await launchPuppeteerBrowser(puppeteer);
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0' });
+    const browser = await getReusablePuppeteerBrowser(puppeteer);
+    page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'domcontentloaded' });
     const pdfBuffer = await page.pdf({
       format: 'A4',
       printBackground: true,
@@ -453,7 +454,8 @@ async function generateMonthlyStatementPdf(statement) {
     });
     return Buffer.from(pdfBuffer);
   } finally {
-    if (browser) await browser.close();
+    if (page) await page.close().catch(() => {});
+    console.log(`Monthly statement PDF generated in ${Date.now() - startedAt}ms`);
   }
 }
 

@@ -316,6 +316,7 @@ exports.getCustomers = async (req, res) => {
       status,
       sortBy = 'createdAt',
       sortOrder = 'desc',
+      page,
       limit,
     } = req.query;
 
@@ -338,26 +339,40 @@ exports.getCustomers = async (req, res) => {
 
     const sortObj = {};
     sortObj[sortBy] = sortOrder === 'asc' ? 1 : -1;
+    const shouldPaginate = page !== undefined || limit !== undefined;
+    const maxLimit = Math.min(Math.max(Number(limit) || 10, 1), 100);
+    const currentPage = Math.max(Number(page) || 1, 1);
+    const skip = (currentPage - 1) * maxLimit;
 
     let customersQuery = Customer.find(query)
       .populate('createdBy', 'name email')
       .sort(sortObj);
 
-    if (limit) {
-      customersQuery = customersQuery.limit(parseInt(limit));
+    if (shouldPaginate) {
+      customersQuery = customersQuery.skip(skip).limit(maxLimit);
     }
 
-    const customers = await customersQuery;
+    const [customers, total] = await Promise.all([
+      customersQuery,
+      Customer.countDocuments(query),
+    ]);
 
     const stats = {
-      total: await Customer.countDocuments(),
-      active: await Customer.countDocuments({ status: 'active' }),
-      inactive: await Customer.countDocuments({ status: 'inactive' }),
+      total,
+      active: await Customer.countDocuments({ ...query, status: 'active' }),
+      inactive: await Customer.countDocuments({ ...query, status: 'inactive' }),
     };
 
     res.status(200).json({
       success: true,
       count: customers.length,
+      total,
+      pagination: {
+        page: currentPage,
+        limit: shouldPaginate ? maxLimit : total,
+        total,
+        totalPages: shouldPaginate ? Math.max(Math.ceil(total / maxLimit), 1) : 1,
+      },
       customers,
       stats,
     });

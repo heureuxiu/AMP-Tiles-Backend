@@ -1,6 +1,6 @@
   const fs = require('fs');
   const { readLogoBase64 } = require('./logoResolver');
-  const { getPuppeteer, launchPuppeteerBrowser } = require('./puppeteerLauncher');
+  const { getPuppeteer, getReusablePuppeteerBrowser } = require('./puppeteerLauncher');
 
   function escapeHtml(text) {
     if (text == null) return '';
@@ -658,13 +658,14 @@
   }
 
   async function generateInvoicePdf(invoice) {
+    const startedAt = Date.now();
     const puppeteer = getPuppeteer();
     const html = buildInvoiceHtml(invoice);
-    let browser;
+    let page;
     try {
-      browser = await launchPuppeteerBrowser(puppeteer);
-      const page = await browser.newPage();
-      await page.setContent(html, { waitUntil: 'networkidle0' });
+      const browser = await getReusablePuppeteerBrowser(puppeteer);
+      page = await browser.newPage();
+      await page.setContent(html, { waitUntil: 'domcontentloaded' });
       const pdfBuffer = await page.pdf({
         format: 'A4',
         printBackground: true,
@@ -672,7 +673,8 @@
       });
       return Buffer.from(pdfBuffer);
     } finally {
-      if (browser) await browser.close();
+      if (page) await page.close().catch(() => {});
+      console.log(`Invoice PDF generated in ${Date.now() - startedAt}ms`);
     }
   }
 

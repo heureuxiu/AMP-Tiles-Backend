@@ -5,6 +5,12 @@ const Quotation = require('../models/Quotation');
 const StockTransaction = require('../models/StockTransaction');
 const { generateInvoicePdf } = require('../utils/invoicePdf');
 const { generatePackingSlipPdf } = require('../utils/packingSlipPdf');
+const { buildEmailAttachments } = require('../middleware/emailAttachments');
+const {
+  saveUploadedAttachments,
+  removeStoredAttachments,
+  buildStoredEmailAttachments,
+} = require('../utils/recordAttachments');
 
 let sendEmail = async () => {
   throw new Error('Email service is not available');
@@ -801,6 +807,8 @@ async function sendInvoiceEmailWithAttachment(invoiceDoc, options = {}) {
   const pdfBuffer = await generateInvoicePdf(invoice);
   const emailPayload = buildInvoiceEmail(invoice, options);
   const invoiceRef = String(invoice.invoiceNumber || invoice._id || 'invoice').replace(/\s/g, '-');
+  const extraAttachments = Array.isArray(options.extraAttachments) ? options.extraAttachments : [];
+  const storedAttachments = await buildStoredEmailAttachments(invoice.attachments);
 
   await sendEmail({
     to: customerEmail,
@@ -814,6 +822,8 @@ async function sendInvoiceEmailWithAttachment(invoiceDoc, options = {}) {
         content: pdfBuffer,
         contentType: 'application/pdf',
       },
+      ...storedAttachments,
+      ...extraAttachments,
     ],
   });
 
@@ -836,6 +846,7 @@ exports.getInvoices = async (req, res) => {
       endDate,
       sortBy = 'createdAt',
       sortOrder = 'desc',
+      page,
       limit,
     } = req.query;
     const query = {};
@@ -857,22 +868,29 @@ exports.getInvoices = async (req, res) => {
 
     const sort = {};
     sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
-    const maxLimit = Math.min(Math.max(Number(limit) || 0, 0), 100);
+    const shouldPaginate = page !== undefined || limit !== undefined;
+    const maxLimit = Math.min(Math.max(Number(limit) || 10, 1), 100);
+    const currentPage = Math.max(Number(page) || 1, 1);
+    const skip = (currentPage - 1) * maxLimit;
 
     let invoicesQuery = Invoice.find(query)
       .populate('createdBy', 'name email')
       .populate('items.product', 'name sku description size retailPrice price coveragePerBox coveragePerBoxUnit')
       .sort(sort);
 
-    if (maxLimit > 0) {
-      invoicesQuery = invoicesQuery.limit(maxLimit);
+    if (shouldPaginate) {
+      invoicesQuery = invoicesQuery.skip(skip).limit(maxLimit);
     }
 
-    const invoices = await invoicesQuery;
+    const [invoices, total, statsInvoices] = await Promise.all([
+      invoicesQuery,
+      Invoice.countDocuments(query),
+      Invoice.find(query).select('items taxRate discountAmount deliveryCost amountPaid paymentStatus status').lean(),
+    ]);
 
     // Recompute grandTotal / remainingBalance from line items so stale DB values don't reach the client
-    const correctedInvoices = invoices.map(inv => {
-      const obj = inv.toObject();
+    const correctInvoiceAmounts = (invoice) => {
+      const obj = invoice.toObject ? invoice.toObject() : invoice;
       const items = obj.items || [];
       const txRate = items.length > 0
         ? (Number(items[0].taxPercent) > 0 ? Number(items[0].taxPercent) : 10)
@@ -892,21 +910,35 @@ exports.getInvoices = async (req, res) => {
       const amountPaid = Math.max(0, Number(obj.amountPaid) || 0);
       const remainingBalance = Math.max(0, Math.round((grandTotal - amountPaid) * 100) / 100);
       return { ...obj, grandTotal, remainingBalance };
-    });
+    };
+    const correctedInvoices = invoices.map(correctInvoiceAmounts);
+    const correctedStatsInvoices = statsInvoices.map(correctInvoiceAmounts);
 
     const statuses = ['draft', 'confirmed', 'delivered', 'cancelled', 'sent', 'paid', 'overdue'];
-    const stats = { total: correctedInvoices.length };
+    const stats = { total };
     statuses.forEach(s => {
-      stats[s] = correctedInvoices.filter(inv => inv.status === s).length;
+      stats[s] = correctedStatsInvoices.filter(inv => inv.status === s).length;
     });
-    stats.totalRevenue = correctedInvoices
+    stats.totalRevenue = correctedStatsInvoices
       .filter(inv => inv.paymentStatus === 'paid' || inv.status === 'paid')
       .reduce((sum, inv) => sum + (inv.grandTotal || 0), 0);
-    stats.pendingAmount = correctedInvoices
+    stats.pendingAmount = correctedStatsInvoices
       .filter(inv => inv.paymentStatus !== 'paid' && inv.status !== 'cancelled')
       .reduce((sum, inv) => sum + (inv.remainingBalance || inv.grandTotal || 0), 0);
 
-    res.status(200).json({ success: true, count: correctedInvoices.length, stats, invoices: correctedInvoices });
+    res.status(200).json({
+      success: true,
+      count: correctedInvoices.length,
+      total,
+      pagination: {
+        page: currentPage,
+        limit: shouldPaginate ? maxLimit : total,
+        total,
+        totalPages: shouldPaginate ? Math.max(Math.ceil(total / maxLimit), 1) : 1,
+      },
+      stats,
+      invoices: correctedInvoices,
+    });
   } catch (error) {
     console.error('Get invoices error:', error);
     res.status(500).json({
@@ -1015,6 +1047,7 @@ exports.createInvoice = async (req, res) => {
       ),
       customerAddress,
       deliveryAddress: String(deliveryAddress || customerAddress || '').trim() || undefined,
+      attachments: await saveUploadedAttachments(req.files),
       invoiceDate: invoiceDate || Date.now(),
       dueDate,
       items: populatedItems,
@@ -1049,7 +1082,9 @@ exports.createInvoice = async (req, res) => {
 
     if (shouldSendEmail) {
       try {
-        await sendInvoiceEmailWithAttachment(populatedInvoice);
+        await sendInvoiceEmailWithAttachment(populatedInvoice, {
+          extraAttachments: buildEmailAttachments(req.files),
+        });
         emailSent = true;
         await Invoice.findByIdAndUpdate(populatedInvoice._id, { emailSent: true, lastEmailedAt: new Date() });
         responseMessage = `Invoice created and emailed to ${normalizeEmail(populatedInvoice.customerEmail)}`;
@@ -1113,7 +1148,23 @@ exports.updateInvoice = async (req, res) => {
       paymentMethod,
       amountPaid,
       sendEmail: shouldSendEmail,
+      retainedAttachmentIds,
     } = req.body;
+
+    const hasAttachmentUpdate =
+      Array.isArray(retainedAttachmentIds) || (Array.isArray(req.files) && req.files.length > 0);
+    const retainedIds = new Set(
+      (Array.isArray(retainedAttachmentIds) ? retainedAttachmentIds : [])
+        .map((value) => String(value))
+        .filter(Boolean)
+    );
+    const existingAttachments = Array.isArray(invoice.attachments) ? invoice.attachments : [];
+    const retainedAttachments = hasAttachmentUpdate
+      ? existingAttachments.filter((attachment) => retainedIds.has(String(attachment._id)))
+      : existingAttachments;
+    const removedAttachments = hasAttachmentUpdate
+      ? existingAttachments.filter((attachment) => !retainedIds.has(String(attachment._id)))
+      : [];
 
     const oldStatus = invoice.status;
     const willConfirmOrDeliver = newStatus === 'confirmed' || newStatus === 'delivered';
@@ -1168,6 +1219,10 @@ exports.updateInvoice = async (req, res) => {
     if (amountPaid !== undefined) {
       invoice.amountPaid = pickFirstFiniteNumber([amountPaid], invoice.amountPaid || 0);
     }
+    if (hasAttachmentUpdate) {
+      const uploadedAttachments = await saveUploadedAttachments(req.files);
+      invoice.attachments = [...retainedAttachments, ...uploadedAttachments];
+    }
     if (shouldSendEmail && !normalizeEmail(invoice.customerEmail)) {
       return res.status(400).json({
         success: false,
@@ -1203,6 +1258,7 @@ exports.updateInvoice = async (req, res) => {
       .populate('createdBy', 'name email')
       .populate('items.product', 'name sku description size coveragePerBox coveragePerBoxUnit')
       .populate('quotation', 'quotationNumber');
+    await removeStoredAttachments(removedAttachments);
 
     let emailSent = false;
     let emailError = null;
@@ -1332,7 +1388,9 @@ exports.sendInvoiceEmail = async (req, res) => {
       });
     }
 
-    const { customerEmail, ccEmails, emailPayload } = await sendInvoiceEmailWithAttachment(invoice);
+    const { customerEmail, ccEmails, emailPayload } = await sendInvoiceEmailWithAttachment(invoice, {
+      extraAttachments: buildEmailAttachments(req.files),
+    });
     await Invoice.findByIdAndUpdate(invoice._id, { emailSent: true, lastEmailedAt: new Date() });
 
     res.status(200).json({
@@ -1422,12 +1480,29 @@ exports.deleteInvoice = async (req, res) => {
     if (!invoice) {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
-    if (invoice.status !== 'draft') {
-      return res.status(400).json({
-        success: false,
-        message: 'Only draft invoices can be deleted',
+
+    const shouldRestoreStock =
+      invoice.status === 'confirmed' || invoice.status === 'delivered';
+    if (shouldRestoreStock) {
+      await restoreStockForInvoice(invoice, {
+        actorId: req.user?.id,
+        reason: 'invoice deleted',
       });
     }
+
+    if (invoice.quotation) {
+      await Quotation.findByIdAndUpdate(invoice.quotation, {
+        $set: {
+          status: 'accepted',
+          convertedToInvoice: false,
+        },
+        $unset: {
+          invoiceId: 1,
+        },
+      });
+    }
+
+    await removeStoredAttachments(invoice.attachments);
     await invoice.deleteOne();
     res.status(200).json({ success: true, message: 'Invoice deleted successfully' });
   } catch (error) {

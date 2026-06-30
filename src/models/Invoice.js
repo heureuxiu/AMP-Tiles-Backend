@@ -1,5 +1,17 @@
 const mongoose = require('mongoose');
 
+const attachmentSchema = new mongoose.Schema(
+  {
+    originalName: { type: String, required: true, trim: true },
+    storedName: { type: String, required: true, trim: true },
+    mimeType: { type: String, trim: true, default: '' },
+    size: { type: Number, default: 0, min: 0 },
+    url: { type: String, required: true, trim: true },
+    uploadedAt: { type: Date, default: Date.now },
+  },
+  { _id: true }
+);
+
 // Invoice Item Schema (tiles business: unit type, discount %, tax %, line total)
 const invoiceItemSchema = new mongoose.Schema({
   product: {
@@ -102,6 +114,10 @@ const invoiceSchema = new mongoose.Schema(
     customerCcEmails: { type: [String], default: [] },
     customerAddress: { type: String, trim: true },
     deliveryAddress: { type: String, trim: true },
+    attachments: {
+      type: [attachmentSchema],
+      default: [],
+    },
     invoiceDate: { type: Date, default: Date.now },
     dueDate: { type: Date },
     items: {
