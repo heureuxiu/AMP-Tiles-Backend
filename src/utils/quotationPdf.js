@@ -125,6 +125,17 @@ function getBillingAddress(source) {
   return String(source?.billingAddress || source?.customerAddress || '').trim();
 }
 
+function normalizeAddressForCompare(address) {
+  return String(address || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function getBillingAddressLabel(billingAddress, deliveryAddress) {
+  if (!billingAddress) return '';
+  return normalizeAddressForCompare(billingAddress) === normalizeAddressForCompare(deliveryAddress)
+    ? 'Same'
+    : billingAddress;
+}
+
 function getLineTotalExGst(item) {
   const base = (Number(item?.quantity) || 0) * (Number(item?.rate) || 0);
   const discountPercent = Number(item?.discountPercent) || 0;
@@ -153,6 +164,7 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
   const quote = quotation;
   const billingAddress = getBillingAddress(quote);
   const deliveryAddress = getDeliveryAddress(quote);
+  const billingAddressLabel = getBillingAddressLabel(billingAddress, deliveryAddress);
 
   const rowsHtml = (quote.items || [])
     .map(
@@ -424,8 +436,8 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
   <div class="header-grid">
     <div class="customer-block">
       <p class="cust-name">${escapeHtml(quote.customerName || '')}</p>
-      ${billingAddress ? `<p><strong>Billing Address:</strong> ${escapeHtml(billingAddress)}</p>` : ''}
       ${deliveryAddress ? `<p><strong>Delivery Address:</strong> ${escapeHtml(deliveryAddress)}</p>` : ''}
+      ${billingAddressLabel ? `<p><strong>Billing Address:</strong> ${escapeHtml(billingAddressLabel)}</p>` : ''}
       ${quote.customerPhone ? `<p>${escapeHtml(quote.customerPhone)}</p>` : ''}
       ${quote.customerEmail ? `<p>${escapeHtml(quote.customerEmail)}</p>` : ''}
     </div>

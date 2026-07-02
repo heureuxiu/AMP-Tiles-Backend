@@ -113,6 +113,21 @@
     return String(source?.deliveryAddress || source?.customerAddress || '').trim();
   }
 
+  function getBillingAddress(source) {
+    return String(source?.billingAddress || source?.customerAddress || '').trim();
+  }
+
+  function normalizeAddressForCompare(address) {
+    return String(address || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  }
+
+  function getBillingAddressLabel(billingAddress, deliveryAddress) {
+    if (!billingAddress) return '';
+    return normalizeAddressForCompare(billingAddress) === normalizeAddressForCompare(deliveryAddress)
+      ? 'Same'
+      : billingAddress;
+  }
+
   function getLineTotalExGst(item) {
     const base = (Number(item?.quantity) || 0) * (Number(item?.rate) || 0);
     const discountPercent = Number(item?.discountPercent) || 0;
@@ -139,7 +154,9 @@
 
     const logoSrc = getLogoBase64();
     const inv = invoice;
+    const billingAddress = getBillingAddress(inv);
     const deliveryAddress = getDeliveryAddress(inv);
+    const billingAddressLabel = getBillingAddressLabel(billingAddress, deliveryAddress);
 
     // Derive effective GST rate from items (each item stores taxPercent); fallback to invoice taxRate or 10
     const items = inv.items || [];
@@ -482,6 +499,7 @@
       <div class="customer-block">
         <p class="cust-name">${escapeHtml(inv.customerName || '')}</p>
         ${deliveryAddress ? `<p><strong>Delivery Address:</strong> ${escapeHtml(deliveryAddress)}</p>` : ''}
+        ${billingAddressLabel ? `<p><strong>Billing Address:</strong> ${escapeHtml(billingAddressLabel)}</p>` : ''}
         ${inv.customerPhone ? `<p>${escapeHtml(inv.customerPhone)}</p>` : ''}
         ${inv.customerEmail ? `<p>${escapeHtml(inv.customerEmail)}</p>` : ''}
       </div>
