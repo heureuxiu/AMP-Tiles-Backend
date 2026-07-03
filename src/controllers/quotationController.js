@@ -1181,6 +1181,7 @@ async function assertRequestedStockAvailability(requestedByProduct, productMap, 
 }
 
 async function validateStockAndLoadProducts(items, options = {}) {
+  const shouldCheckAvailability = options.checkAvailability !== false;
   const requestedRows = [];
   const productIds = [];
 
@@ -1217,7 +1218,9 @@ async function validateStockAndLoadProducts(items, options = {}) {
     );
   }
 
-  await assertRequestedStockAvailability(requestedByProduct, productMap, options);
+  if (shouldCheckAvailability) {
+    await assertRequestedStockAvailability(requestedByProduct, productMap, options);
+  }
 
   return productMap;
 }
@@ -1333,7 +1336,9 @@ exports.createQuotation = async (req, res) => {
     }
 
     // Validate and populate items (with discount / tax per line)
-    const productMap = await validateStockAndLoadProducts(items);
+    const productMap = await validateStockAndLoadProducts(items, {
+      checkAvailability: false,
+    });
     const populatedItems = [];
     let subtotal = 0;
     let totalDiscount = 0;
@@ -1534,6 +1539,7 @@ exports.updateQuotation = async (req, res) => {
       const itemsToValidate = items && items.length > 0 ? items : quotation.items;
       validatedProductMap = await validateStockAndLoadProducts(itemsToValidate, {
         excludeQuotationId: quotation._id,
+        checkAvailability: false,
       });
     }
 
@@ -1543,6 +1549,7 @@ exports.updateQuotation = async (req, res) => {
         validatedProductMap ||
         (await validateStockAndLoadProducts(items, {
           excludeQuotationId: quotation._id,
+          checkAvailability: false,
         }));
       const populatedItems = [];
       let subtotal = 0;
