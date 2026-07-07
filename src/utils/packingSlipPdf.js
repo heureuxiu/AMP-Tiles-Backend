@@ -45,6 +45,33 @@ function getDisplayQuantity(item) {
   return formatQuantity(item?.quantity ?? 0);
 }
 
+function getCoveragePerBoxSqm(item) {
+  const coveragePerBox = Number(item?.product?.coveragePerBox) || 0;
+  if (coveragePerBox <= 0) return 0;
+  return String(item?.product?.coveragePerBoxUnit || '').toLowerCase() === 'sqm'
+    ? coveragePerBox
+    : coveragePerBox / SQFT_PER_SQM;
+}
+
+function getBoxCount(item) {
+  const unitType = String(item?.unitType || '').toLowerCase();
+  const quantity = Number(item?.quantity) || 0;
+  if (unitType.includes('box')) return quantity;
+
+  const coverageSqm = Number(item?.coverageSqm);
+  const perBoxSqm = getCoveragePerBoxSqm(item);
+  if (Number.isFinite(coverageSqm) && coverageSqm > 0 && perBoxSqm > 0) {
+    return Math.ceil(coverageSqm / perBoxSqm);
+  }
+
+  return null;
+}
+
+function getDisplayBoxes(item) {
+  const boxes = getBoxCount(item);
+  return boxes == null ? '-' : formatQuantity(boxes);
+}
+
 function getItemSize(item) {
   const rawSize = item?.product?.size ?? item?.size;
   return rawSize ? String(rawSize) : '';
@@ -71,6 +98,10 @@ function buildPackingSlipHtml(invoice) {
   const inv = invoice;
   const deliveryAddress = String(inv.deliveryAddress || inv.customerAddress || '').trim();
   const items = inv.items || [];
+  const totalBoxes = items.reduce((sum, item) => {
+    const boxes = getBoxCount(item);
+    return boxes == null ? sum : sum + boxes;
+  }, 0);
 
   const rowsHtml = items.map((item) => `
     <tr>
@@ -79,6 +110,7 @@ function buildPackingSlipHtml(invoice) {
       <td>${escapeHtml(getItemSize(item))}</td>
       <td>${escapeHtml(item.unitType || '')}</td>
       <td class="center">${escapeHtml(getDisplayQuantity(item))}</td>
+      <td class="center">${escapeHtml(getDisplayBoxes(item))}</td>
     </tr>`
   ).join('');
 
@@ -123,6 +155,9 @@ function buildPackingSlipHtml(invoice) {
     table.items tbody tr:nth-child(even) { background: #fafafa; }
     table.items tbody td { padding: 8px 10px; vertical-align: top; }
     table.items .center { text-align: center; }
+    .items-summary { display: flex; justify-content: flex-end; margin-top: 8px; }
+    .summary-pill { border: 1px solid #111; padding: 7px 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+    .summary-pill span { margin-left: 10px; font-size: 13px; }
 
     /* Notes */
     .notes-section { margin-top: 18px; border: 1px solid #ddd; border-radius: 4px; padding: 10px 12px; }
@@ -186,12 +221,16 @@ function buildPackingSlipHtml(invoice) {
           <th>Size</th>
           <th>Unit</th>
           <th class="center">Qty</th>
+          <th class="center">Boxes</th>
         </tr>
       </thead>
       <tbody>
         ${rowsHtml}
       </tbody>
     </table>
+    <div class="items-summary">
+      <div class="summary-pill">Total Boxes <span>${escapeHtml(formatQuantity(totalBoxes))}</span></div>
+    </div>
 
     ${inv.notes ? `
     <div class="notes-section">
