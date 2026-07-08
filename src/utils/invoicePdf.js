@@ -134,6 +134,10 @@
     return Math.round(base * (1 - discountPercent / 100) * 100) / 100;
   }
 
+  function getLineBaseExGst(item) {
+    return Math.round(((Number(item?.quantity) || 0) * (Number(item?.rate) || 0)) * 100) / 100;
+  }
+
   function getLogoBase64() {
     return readLogoBase64();
   }
@@ -182,6 +186,9 @@
     ).join('');
 
     // Recompute totals from lineTotals for accuracy (avoids relying on potentially stale stored values)
+    const itemsGrossPreTax = Math.round(items.reduce((sum, item) => {
+      return sum + getLineBaseExGst(item);
+    }, 0) * 100) / 100;
     const itemsPreTax = Math.round(items.reduce((sum, item) => {
       return sum + getLineTotalExGst(item);
     }, 0) * 100) / 100;
@@ -190,9 +197,12 @@
       const lt = getLineTotalExGst(item);
       return sum + (lt * (taxP / 100));
     }, 0) * 100) / 100;
-    const discountAmount = inv.discountAmount ?? inv.discount ?? 0;
+    const discountAmount = Number(inv.discountAmount ?? inv.discount ?? 0) || 0;
+    const lineDiscountTotal = Math.round((itemsGrossPreTax - itemsPreTax) * 100) / 100;
+    const totalDiscount = Math.max(0, Math.round((lineDiscountTotal + discountAmount) * 100) / 100);
     const deliveryCost = Math.max(0, Number(inv.deliveryCost) || 0);
     const deliveryGst = Math.round(deliveryCost * (taxRate / 100) * 100) / 100;
+    const grossAmount = Math.round((itemsGrossPreTax + deliveryCost) * 100) / 100;
     const subtotal = Math.round((itemsPreTax - discountAmount + deliveryCost) * 100) / 100;
     const totalGst = Math.round((itemsGst + deliveryGst) * 100) / 100;
     const grandTotal = Math.round((subtotal + totalGst) * 100) / 100;
@@ -560,11 +570,19 @@
     <div class="totals-wrapper">
       <table class="totals-table">
         <tr>
-          <td class="t-label">Subtotal (ex. GST)</td>
+          <td class="t-label">Gross Amount</td>
+          <td class="t-value">${formatNumber(grossAmount)}</td>
+        </tr>
+        <tr>
+          <td class="t-label">Total Discount</td>
+          <td class="t-value">${formatNumber(totalDiscount)}</td>
+        </tr>
+        <tr>
+          <td class="t-label">Subtotal (Ex GST)</td>
           <td class="t-value">${formatNumber(subtotal)}</td>
         </tr>
         <tr>
-          <td class="t-label">Total GST ${taxRate}%</td>
+          <td class="t-label">GST (${taxRate}%)</td>
           <td class="t-value">${formatNumber(totalGst)}</td>
         </tr>
         <tr class="grand-row">

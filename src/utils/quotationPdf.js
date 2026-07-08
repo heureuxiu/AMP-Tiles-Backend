@@ -142,6 +142,10 @@ function getLineTotalExGst(item) {
   return Math.round(base * (1 - discountPercent / 100) * 100) / 100;
 }
 
+function getLineBaseExGst(item) {
+  return Math.round(((Number(item?.quantity) || 0) * (Number(item?.rate) || 0)) * 100) / 100;
+}
+
 function getLogoBase64() {
   return readLogoBase64();
 }
@@ -186,6 +190,9 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
 
   const items = quote.items || [];
   const taxRate = quote.taxRate || 10;
+  const itemsGrossPreTax = Math.round(items.reduce((sum, item) => {
+    return sum + getLineBaseExGst(item);
+  }, 0) * 100) / 100;
   const itemsPreTax = Math.round(items.reduce((sum, item) => {
     const lineTotal = getLineTotalExGst(item);
     return sum + lineTotal;
@@ -199,6 +206,8 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
   const storedDiscount = Number(quote.discount) || 0;
   const storedTax = Number(quote.tax) || 0;
   const fallbackItemsPreTax = Math.max(0, Math.round((storedSubtotal - storedDiscount) * 100) / 100);
+  const fallbackItemsGrossPreTax = Math.max(storedSubtotal, fallbackItemsPreTax + storedDiscount);
+  const effectiveItemsGrossPreTax = items.length > 0 ? itemsGrossPreTax : fallbackItemsGrossPreTax;
   const effectiveItemsPreTax = items.length > 0 ? itemsPreTax : fallbackItemsPreTax;
   const effectiveItemsGst = items.length > 0 ? itemsGst : storedTax;
   const baseTotal = fallbackItemsPreTax + storedTax;
@@ -213,6 +222,9 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
       ? normalizeDeliveryCost(fallbackDeliveryCost)
       : 0;
   const deliveryGst = calculateDeliveryGst(deliveryCost);
+  const lineDiscountTotal = Math.round((effectiveItemsGrossPreTax - effectiveItemsPreTax) * 100) / 100;
+  const totalDiscount = Math.max(0, Math.round(lineDiscountTotal * 100) / 100);
+  const grossAmount = Math.round((effectiveItemsGrossPreTax + deliveryCost) * 100) / 100;
   const subtotal = Math.round((effectiveItemsPreTax + deliveryCost) * 100) / 100;
   const totalGst = Math.round((effectiveItemsGst + deliveryGst) * 100) / 100;
   const grandTotal = Number.isFinite(Number(quote.grandTotal))
@@ -502,11 +514,19 @@ function buildQuotationHtml(quotation, companyInfo = {}) {
   <div class="totals-wrapper">
     <table class="totals-table">
       <tr>
-        <td class="t-label">Subtotal (ex. GST)</td>
+        <td class="t-label">Gross Amount</td>
+        <td class="t-value">${formatNumber(grossAmount)}</td>
+      </tr>
+      <tr>
+        <td class="t-label">Total Discount</td>
+        <td class="t-value">${formatNumber(totalDiscount)}</td>
+      </tr>
+      <tr>
+        <td class="t-label">Subtotal (Ex GST)</td>
         <td class="t-value">${formatNumber(subtotal)}</td>
       </tr>
       <tr>
-        <td class="t-label">Total GST ${taxRate}%</td>
+        <td class="t-label">GST (${taxRate}%)</td>
         <td class="t-value">${formatNumber(totalGst)}</td>
       </tr>
       <tr class="grand-row">
