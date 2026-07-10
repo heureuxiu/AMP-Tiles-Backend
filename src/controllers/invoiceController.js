@@ -439,6 +439,39 @@ function getSqmPerBox(product) {
   return covUnit === 'sqm' ? covPerBox : covPerBox / SQFT_PER_SQM;
 }
 
+function getTilesPerBox(product) {
+  const tilesPerBox = Number(product?.tilesPerBox) || 0;
+  return tilesPerBox > 0 ? tilesPerBox : 0;
+}
+
+function getSqmPerPiece(product) {
+  const sqmPerBox = getSqmPerBox(product);
+  const tilesPerBox = getTilesPerBox(product);
+  if (sqmPerBox <= 0 || tilesPerBox <= 0) return 0;
+  return sqmPerBox / tilesPerBox;
+}
+
+function getDefaultRatePerSqm(product) {
+  const baseRate = Number(product?.retailPrice ?? product?.price);
+  if (!Number.isFinite(baseRate) || baseRate < 0) return 0;
+
+  const pricingUnit = product?.pricingUnit || 'per_box';
+  if (pricingUnit === 'per_sqm') return baseRate;
+  if (pricingUnit === 'per_sqft') return baseRate * SQFT_PER_SQM;
+
+  const sqmPerBox = getSqmPerBox(product);
+  if (pricingUnit === 'per_box') {
+    return sqmPerBox > 0 ? baseRate / sqmPerBox : baseRate;
+  }
+
+  const sqmPerPiece = getSqmPerPiece(product);
+  if (pricingUnit === 'per_piece') {
+    return sqmPerPiece > 0 ? baseRate / sqmPerPiece : baseRate;
+  }
+
+  return baseRate;
+}
+
 function getProductIdFromItem(item) {
   if (!item || !item.product) return '';
   if (typeof item.product === 'object' && item.product._id) {
@@ -460,10 +493,14 @@ function getItemCoverageSqm(product, item) {
     return hasCoveragePerBox ? quantity * sqmPerBox : null;
   }
   if (itemUnit === 'sqm') {
-    return hasCoveragePerBox ? quantity * sqmPerBox : quantity;
+    return quantity;
   }
   if (itemUnit === 'sqft') {
-    return hasCoveragePerBox ? quantity * sqmPerBox : quantity / SQFT_PER_SQM;
+    return quantity / SQFT_PER_SQM;
+  }
+  if (itemUnit === 'piece') {
+    const sqmPerPiece = getSqmPerPiece(product);
+    return sqmPerPiece > 0 ? quantity * sqmPerPiece : null;
   }
   if (itemUnit === 'lm') {
     return quantity;
@@ -473,26 +510,39 @@ function getItemCoverageSqm(product, item) {
 
 function getItemStockDemand(product, item) {
   const quantity = Number(item.quantity) || 0;
-  const stockUnit = normalizeStockUnit(product.unit, product.pricingUnit);
-  if (stockUnit === 'box' || stockUnit === 'piece' || stockUnit === 'lm') return quantity;
-
   const coverageSqm = getItemCoverageSqm(product, item);
-  if (coverageSqm == null) return quantity;
+  if (coverageSqm == null) {
+    return quantity;
+  }
+
+  const stockUnit = normalizeStockUnit(product.unit, product.pricingUnit);
   if (stockUnit === 'sqm') return coverageSqm;
-  return coverageSqm * SQFT_PER_SQM;
+  if (stockUnit === 'sqft') return coverageSqm * SQFT_PER_SQM;
+
+  const sqmPerBox = getSqmPerBox(product);
+  if (stockUnit === 'box') {
+    return sqmPerBox > 0 ? coverageSqm / sqmPerBox : quantity;
+  }
+
+  const sqmPerPiece = getSqmPerPiece(product);
+  if (stockUnit === 'piece') {
+    return sqmPerPiece > 0 ? coverageSqm / sqmPerPiece : quantity;
+  }
+
+  if (stockUnit === 'lm') return quantity;
+  return quantity;
 }
 
 function getBillableQuantity(product, item) {
   const quantity = pickFirstFiniteNumber([item.quantity], 0);
-  const pricingUnit = product.pricingUnit || 'per_box';
-  const sqmPerBox = getSqmPerBox(product);
-  const coverageSqmFromBoxes = sqmPerBox > 0 ? quantity * sqmPerBox : null;
+  const normalizedUnit = normalizeItemUnitType(item?.unitType);
+  const coverageSqm = getItemCoverageSqm(product, item);
 
-  if (pricingUnit === 'per_sqm' && coverageSqmFromBoxes != null) {
-    return coverageSqmFromBoxes;
+  if (normalizedUnit === 'sqm' && coverageSqm != null) {
+    return coverageSqm;
   }
-  if (pricingUnit === 'per_sqft' && coverageSqmFromBoxes != null) {
-    return coverageSqmFromBoxes * SQFT_PER_SQM;
+  if (normalizedUnit === 'sqft' && coverageSqm != null) {
+    return coverageSqm * SQFT_PER_SQM;
   }
   return quantity;
 }
@@ -500,8 +550,13 @@ function getBillableQuantity(product, item) {
 // Build one invoice line item with line total and optional coverage (tiles)
 function buildInvoiceItem(product, item) {
   const quantity = pickFirstFiniteNumber([item.quantity], 0);
+  const normalizedUnit = normalizeItemUnitType(item?.unitType);
+  const fallbackRate =
+    normalizedUnit === 'sqm' || normalizedUnit === 'sqft'
+      ? getDefaultRatePerSqm(product)
+      : pickFirstFiniteNumber([product.retailPrice, product.price], 0);
   const rate = roundMoney(
-    pickFirstFiniteNumber([item.rate, product.retailPrice, product.price], 0)
+    pickFirstFiniteNumber([item.rate, fallbackRate], 0)
   );
   const discountPercent = pickFirstFiniteNumber([item.discountPercent], 0);
   const taxPercent = pickFirstFiniteNumber([item.taxPercent, product.taxPercent], 10);
@@ -582,7 +637,7 @@ async function getHeldQuantitiesByProduct(productIds, options = {}) {
 
   const quotations = await Quotation.find(query)
     .select('items')
-    .populate('items.product', 'unit coveragePerBox coveragePerBoxUnit pricingUnit');
+    .populate('items.product', 'unit coveragePerBox coveragePerBoxUnit pricingUnit tilesPerBox');
 
   const targetIds = new Set(objectIds.map((id) => String(id)));
   const heldByProduct = new Map();
