@@ -54,6 +54,9 @@ function getCoveragePerBoxSqm(item) {
 }
 
 function getDisplayBoxes(item) {
+  const boxesOrdered = Number(item?.boxesOrdered);
+  if (Number.isFinite(boxesOrdered) && boxesOrdered > 0) return formatQuantity(boxesOrdered);
+
   const unitType = String(item?.unitType || '').toLowerCase();
   const quantity = Number(item?.quantityOrdered ?? item?.quantity) || 0;
   if (unitType.includes('box')) return formatQuantity(quantity);

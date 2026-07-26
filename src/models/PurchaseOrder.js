@@ -35,6 +35,7 @@ const purchaseOrderItemSchema = new mongoose.Schema(
     },
     // Coverage (sq m) - for tiles: from product or computed
     coverageSqm: { type: Number, default: null },
+    boxesOrdered: { type: Number, default: null, min: 0 },
     // Goods receiving
     quantityReceived: { type: Number, default: 0, min: 0 },
     damagedQuantity: { type: Number, default: 0, min: 0 },

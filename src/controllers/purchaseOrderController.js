@@ -297,6 +297,27 @@ function getSqmPerBox(product) {
     : coveragePerBox * SQM_PER_SQFT;
 }
 
+function getBoxesOrdered({ quantity, unitType, product }) {
+  const qty = Number(quantity) || 0;
+  if (qty <= 0) return null;
+
+  const normalizedUnit = normalizePoUnitType(unitType);
+  if (normalizedUnit === 'box') return roundQty(qty);
+
+  const sqmPerBox = getSqmPerBox(product);
+  if (normalizedUnit === 'piece') {
+    const tilesPerBox = Number(product?.tilesPerBox) || 0;
+    return tilesPerBox > 0 ? Math.ceil(qty / tilesPerBox) : null;
+  }
+
+  if (sqmPerBox <= 0) return null;
+
+  if (normalizedUnit === 'sqm') return Math.ceil(qty / sqmPerBox);
+  if (normalizedUnit === 'sqft') return Math.ceil((qty * SQM_PER_SQFT) / sqmPerBox);
+
+  return null;
+}
+
 function createStockUnitValidationError(message) {
   const error = new Error(message);
   error.statusCode = 400;
@@ -510,6 +531,11 @@ function buildItem(product, item, forcedRate) {
     else if ((item.unitType === 'Sqm' || item.unitType === 'Sq Meter') && qty) coverageSqm = qty;
     else if (item.unitType === 'Sq Ft' && qty) coverageSqm = Math.round((qty * SQM_PER_SQFT) * 100) / 100;
   }
+  const boxesOrdered = getBoxesOrdered({
+    quantity: qty,
+    unitType: item.unitType,
+    product,
+  });
   return {
     product: product._id,
     productName: product.name,
@@ -522,6 +548,7 @@ function buildItem(product, item, forcedRate) {
     taxPercent: tax,
     lineTotal,
     coverageSqm,
+    boxesOrdered,
     quantityReceived: Number(item.quantityReceived) || 0,
     damagedQuantity: Number(item.damagedQuantity) || 0,
     batchNumber: item.batchNumber || '',
