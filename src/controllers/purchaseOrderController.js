@@ -307,13 +307,13 @@ function getBoxesOrdered({ quantity, unitType, product }) {
   const sqmPerBox = getSqmPerBox(product);
   if (normalizedUnit === 'piece') {
     const tilesPerBox = Number(product?.tilesPerBox) || 0;
-    return tilesPerBox > 0 ? Math.ceil(qty / tilesPerBox) : null;
+    return tilesPerBox > 0 ? Math.ceil(qty / tilesPerBox - 1e-9) : null;
   }
 
   if (sqmPerBox <= 0) return null;
 
-  if (normalizedUnit === 'sqm') return Math.ceil(qty / sqmPerBox);
-  if (normalizedUnit === 'sqft') return Math.ceil((qty * SQM_PER_SQFT) / sqmPerBox);
+  if (normalizedUnit === 'sqm') return Math.ceil(qty / sqmPerBox - 1e-9);
+  if (normalizedUnit === 'sqft') return Math.ceil((qty * SQM_PER_SQFT) / sqmPerBox - 1e-9);
 
   return null;
 }

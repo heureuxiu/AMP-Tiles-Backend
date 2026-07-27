@@ -92,7 +92,7 @@ function getDisplayBoxes(item) {
   const coverageSqm = Number(item?.coverageSqm);
   const perBoxSqm = getCoveragePerBoxSqm(item);
   if (Number.isFinite(coverageSqm) && coverageSqm > 0 && perBoxSqm > 0) {
-    return formatQuantity(Math.ceil(coverageSqm / perBoxSqm));
+    return formatQuantity(Math.ceil(coverageSqm / perBoxSqm - 1e-9));
   }
   return '-';
 }

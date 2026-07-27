@@ -61,7 +61,7 @@ function getBoxCount(item) {
   const coverageSqm = Number(item?.coverageSqm);
   const perBoxSqm = getCoveragePerBoxSqm(item);
   if (Number.isFinite(coverageSqm) && coverageSqm > 0 && perBoxSqm > 0) {
-    return Math.ceil(coverageSqm / perBoxSqm);
+    return Math.ceil(coverageSqm / perBoxSqm - 1e-9);
   }
 
   return null;
