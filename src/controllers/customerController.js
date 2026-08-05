@@ -3,7 +3,12 @@ const Invoice = require('../models/Invoice');
 const Quotation = require('../models/Quotation');
 const { generateMonthlyStatementPdf } = require('../utils/monthlyStatementPdf');
 
+let sendEmail = async () => {
+  throw new Error('Email service is not available');
+};
+
 const SQFT_PER_SQM = 10.764;
+const COMPANY_NAME = 'AMP TILES';
 
 function roundMoney(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
@@ -34,6 +39,121 @@ function normalizeEmailList(value, primaryEmail = '') {
       seen.add(email);
       return true;
     });
+}
+
+function summarizeEmailError(error, fallbackMessage = 'Failed to send monthly statement email') {
+  return [
+    error?.message || fallbackMessage,
+    error?.code ? `code=${error.code}` : '',
+    error?.command ? `command=${error.command}` : '',
+    error?.responseCode ? `responseCode=${error.responseCode}` : '',
+  ]
+    .filter(Boolean)
+    .join(' | ');
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatEmailDate(value) {
+  if (!value) return 'N/A';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'N/A';
+  return date.toLocaleDateString('en-AU', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+function formatCurrency(amount) {
+  return new Intl.NumberFormat('en-AU', {
+    style: 'currency',
+    currency: 'AUD',
+  }).format(Number(amount) || 0);
+}
+
+function buildMonthlyStatementEmail(statement) {
+  const customerName = statement.customer?.name || 'Customer';
+  const periodLabel = statement.monthLabel || [
+    formatEmailDate(statement.dateRange?.start),
+    formatEmailDate(statement.dateRange?.end),
+  ].join(' - ');
+  const balanceDue = Number(statement.totals?.outstandingTotal) || 0;
+  const invoiceTotal = Number(statement.totals?.grandTotal) || 0;
+  const paidTotal = Number(statement.totals?.paidTotal) || 0;
+
+  const text = [
+    `Dear ${customerName},`,
+    '',
+    `Please find attached your activity statement for ${periodLabel}.`,
+    '',
+    `From Date: ${formatEmailDate(statement.dateRange?.start)}`,
+    `To Date: ${formatEmailDate(statement.dateRange?.end)}`,
+    `Invoice Amount: ${formatCurrency(invoiceTotal)}`,
+    `Payments: ${formatCurrency(paidTotal)}`,
+    `Balance Due: ${formatCurrency(balanceDue)}`,
+    '',
+    'Should you have any questions regarding this statement, please do not hesitate to contact us.',
+    '',
+    'Thank you,',
+    COMPANY_NAME,
+  ].join('\n');
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; color:#111827; line-height:1.45;">
+      <p>Dear ${escapeHtml(customerName)},</p>
+      <p>Please find attached your activity statement for ${escapeHtml(periodLabel)}.</p>
+      <p>
+        <strong>From Date:</strong> ${escapeHtml(formatEmailDate(statement.dateRange?.start))}<br/>
+        <strong>To Date:</strong> ${escapeHtml(formatEmailDate(statement.dateRange?.end))}<br/>
+        <strong>Invoice Amount:</strong> ${escapeHtml(formatCurrency(invoiceTotal))}<br/>
+        <strong>Payments:</strong> ${escapeHtml(formatCurrency(paidTotal))}<br/>
+        <strong>Balance Due:</strong> ${escapeHtml(formatCurrency(balanceDue))}
+      </p>
+      <p>Should you have any questions regarding this statement, please do not hesitate to contact us.</p>
+      <p style="margin-top:24px;">
+        Thank you,<br/>
+        ${escapeHtml(COMPANY_NAME)}
+      </p>
+    </div>
+  `;
+
+  return {
+    subject: `Activity Statement ${periodLabel} from ${COMPANY_NAME}`,
+    text,
+    html,
+  };
+}
+
+function loadOptionalModule(candidates) {
+  for (const mod of candidates) {
+    try {
+      return require(mod);
+    } catch (error) {
+      if (error && error.code !== 'MODULE_NOT_FOUND') {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn(`Failed loading optional module "${mod}"`, error.message);
+        }
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+const mailerModule = loadOptionalModule(['../utils/mailer']);
+if (mailerModule && typeof mailerModule.sendEmail === 'function') {
+  ({ sendEmail } = mailerModule);
+} else if (process.env.NODE_ENV !== 'production') {
+  console.warn('Mailer utility not found. Monthly statement email sending will be disabled.');
 }
 
 function escapeRegex(value) {
@@ -73,6 +193,65 @@ function parseStatementMonth(month) {
       year: 'numeric',
       timeZone: 'UTC',
     }),
+  };
+}
+
+function parseDateOnly(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) return null;
+  const [year, monthNumber, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, monthNumber - 1, day, 0, 0, 0, 0));
+
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== monthNumber - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  return date;
+}
+
+function parseStatementDateRange({ month, startDate, endDate } = {}) {
+  if (startDate || endDate) {
+    const start = parseDateOnly(startDate);
+    const endStartOfDay = parseDateOnly(endDate);
+
+    if (!start || !endStartOfDay) {
+      const error = new Error('Please provide startDate and endDate in YYYY-MM-DD format');
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const endExclusive = new Date(endStartOfDay.getTime() + 24 * 60 * 60 * 1000);
+    if (start >= endExclusive) {
+      const error = new Error('Start date must be before or equal to end date');
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const end = new Date(endExclusive.getTime() - 1);
+    const label = `${start.toLocaleDateString('en-AU', { timeZone: 'UTC' })} - ${endStartOfDay.toLocaleDateString('en-AU', { timeZone: 'UTC' })}`;
+
+    return {
+      start,
+      end,
+      endExclusive,
+      label,
+      key: `${startDate}-to-${endDate}`,
+    };
+  }
+
+  const dateRange = parseStatementMonth(month);
+  if (!dateRange) {
+    const error = new Error('Please provide month in YYYY-MM format or startDate/endDate in YYYY-MM-DD format');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return {
+    ...dateRange,
+    key: month,
   };
 }
 
@@ -207,14 +386,8 @@ function addProductSummary(productMap, item) {
   summary.unitPrice = summary.quantity > 0 ? roundMoney(summary.total / summary.quantity) : summary.unitPrice;
 }
 
-async function buildMonthlyStatement(customerId, month) {
-  const dateRange = parseStatementMonth(month);
-  if (!dateRange) {
-    const error = new Error('Please provide month in YYYY-MM format');
-    error.statusCode = 400;
-    throw error;
-  }
-
+async function buildMonthlyStatement(customerId, periodOptions) {
+  const dateRange = parseStatementDateRange(periodOptions);
   const customer = await Customer.findById(customerId);
   if (!customer) {
     const error = new Error('Customer not found');
@@ -291,7 +464,7 @@ async function buildMonthlyStatement(customerId, month) {
 
   return {
     customer: buildCustomerSnapshot(customer),
-    month,
+    month: dateRange.key,
     monthLabel: dateRange.label,
     dateRange: {
       start: dateRange.start,
@@ -592,7 +765,11 @@ exports.getCustomerStats = async (req, res) => {
 
 exports.getCustomerMonthlyStatement = async (req, res) => {
   try {
-    const statement = await buildMonthlyStatement(req.params.id, req.query.month);
+    const statement = await buildMonthlyStatement(req.params.id, {
+      month: req.query.month,
+      startDate: req.query.startDate,
+      endDate: req.query.endDate,
+    });
 
     res.status(200).json({
       success: true,
@@ -609,7 +786,11 @@ exports.getCustomerMonthlyStatement = async (req, res) => {
 
 exports.getCustomerMonthlyStatementPdf = async (req, res) => {
   try {
-    const statement = await buildMonthlyStatement(req.params.id, req.query.month);
+    const statement = await buildMonthlyStatement(req.params.id, {
+      month: req.query.month,
+      startDate: req.query.startDate,
+      endDate: req.query.endDate,
+    });
     const pdfBuffer = await generateMonthlyStatementPdf(statement);
     const safeCustomerName = String(statement.customer?.name || 'customer')
       .replace(/[^a-z0-9]+/gi, '-')
@@ -626,6 +807,65 @@ exports.getCustomerMonthlyStatementPdf = async (req, res) => {
     res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || 'Failed to generate customer monthly statement PDF',
+    });
+  }
+};
+
+exports.sendCustomerMonthlyStatementEmail = async (req, res) => {
+  try {
+    const statement = await buildMonthlyStatement(req.params.id, {
+      month: req.query.month || req.body?.month,
+      startDate: req.query.startDate || req.body?.startDate,
+      endDate: req.query.endDate || req.body?.endDate,
+    });
+
+    const customerEmail = normalizeEmail(statement.customer?.email);
+    if (!customerEmail) {
+      return res.status(400).json({
+        success: false,
+        message: 'Customer email is missing. Please add customer email before sending monthly statement.',
+      });
+    }
+
+    const customer = await Customer.findById(req.params.id).select('ccEmails');
+    const ccEmails = normalizeEmailList(customer?.ccEmails || [], customerEmail);
+    const pdfBuffer = await generateMonthlyStatementPdf(statement);
+    const emailPayload = buildMonthlyStatementEmail(statement);
+    const safeCustomerName = String(statement.customer?.name || 'customer')
+      .replace(/[^a-z0-9]+/gi, '-')
+      .replace(/^-+|-+$/g, '')
+      .toLowerCase();
+    const filename = `monthly-statement-${safeCustomerName}-${statement.month}.pdf`;
+
+    await sendEmail({
+      to: customerEmail,
+      cc: ccEmails.length > 0 ? ccEmails.join(', ') : undefined,
+      subject: emailPayload.subject,
+      text: emailPayload.text,
+      html: emailPayload.html,
+      attachments: [
+        {
+          filename,
+          content: pdfBuffer.toString('base64'),
+          contentType: 'application/pdf',
+        },
+      ],
+    });
+
+    res.status(200).json({
+      success: true,
+      emailSent: true,
+      message: `Monthly statement sent to ${customerEmail}${
+        ccEmails.length > 0 ? ` (cc: ${ccEmails.join(', ')})` : ''
+      }`,
+      monthlyStatement: statement,
+    });
+  } catch (error) {
+    const details = summarizeEmailError(error);
+    console.error('Error sending customer monthly statement email:', error);
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: details || 'Failed to send monthly statement email',
     });
   }
 };

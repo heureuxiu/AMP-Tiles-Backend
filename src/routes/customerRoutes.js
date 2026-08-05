@@ -8,6 +8,7 @@ const {
   getCustomerStats,
   getCustomerMonthlyStatement,
   getCustomerMonthlyStatementPdf,
+  sendCustomerMonthlyStatementEmail,
 } = require('../controllers/customerController');
 const { protect } = require('../middleware/auth');
 
@@ -21,6 +22,7 @@ router.route('/').get(getCustomers).post(createCustomer);
 
 router.get('/:id/monthly-statement', getCustomerMonthlyStatement);
 router.get('/:id/monthly-statement/pdf', getCustomerMonthlyStatementPdf);
+router.post('/:id/monthly-statement/send', sendCustomerMonthlyStatementEmail);
 
 router.route('/:id').get(getCustomer).put(updateCustomer).delete(deleteCustomer);
 
