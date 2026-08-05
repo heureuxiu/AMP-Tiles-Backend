@@ -264,12 +264,12 @@ function buildMonthlyStatementHtml(statement) {
       }
       .bank div { margin-bottom: 4px; }
       .payment-advice {
-        position: absolute;
-        left: 52px;
-        right: 52px;
-        bottom: 46px;
+        position: relative;
+        margin-top: 34px;
         border-top: 2px dashed #171717;
         padding-top: 22px;
+        break-inside: avoid;
+        page-break-inside: avoid;
       }
       .scissors {
         position: absolute;
@@ -328,10 +328,7 @@ function buildMonthlyStatementHtml(statement) {
         padding-top: 3px;
       }
       .footer {
-        position: absolute;
-        left: 52px;
-        right: 52px;
-        bottom: 22px;
+        margin-top: 14px;
         font-size: 11px;
       }
     </style>
