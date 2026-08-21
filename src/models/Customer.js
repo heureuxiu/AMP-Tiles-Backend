@@ -48,6 +48,16 @@ const customerSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    paymentTerms: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    deliveryMethod: {
+      type: String,
+      trim: true,
+      enum: ['Supplier Delivery', 'Pickup', 'Freight'],
+    },
     address: {
       street: { type: String, trim: true },
       city: { type: String, trim: true },
@@ -109,6 +119,8 @@ customerSchema.index({ name: 1 });
 customerSchema.index({ email: 1 });
 customerSchema.index({ ccEmails: 1 });
 customerSchema.index({ abn: 1 });
+customerSchema.index({ paymentTerms: 1 });
+customerSchema.index({ deliveryMethod: 1 });
 customerSchema.index({ status: 1 });
 customerSchema.index({ createdAt: -1 });
 

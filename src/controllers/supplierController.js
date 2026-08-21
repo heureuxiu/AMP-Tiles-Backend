@@ -1,5 +1,31 @@
 const Supplier = require('../models/Supplier');
 
+function normalizeEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizeEmailList(values, primaryEmail = '') {
+  const rawValues = Array.isArray(values) ? values : [values];
+  const primary = normalizeEmail(primaryEmail);
+  const seen = new Set();
+  const emails = [];
+
+  for (const rawValue of rawValues) {
+    const parts = String(rawValue || '')
+      .split(/[,\n;\s]+/g)
+      .map((part) => normalizeEmail(part))
+      .filter(Boolean);
+
+    for (const email of parts) {
+      if (email === primary || seen.has(email)) continue;
+      seen.add(email);
+      emails.push(email);
+    }
+  }
+
+  return emails;
+}
+
 // @desc    Get all suppliers with optional filtering
 // @route   GET /api/suppliers
 // @access  Private
@@ -23,6 +49,7 @@ exports.getSuppliers = async (req, res) => {
         { name: { $regex: search, $options: 'i' } },
         { supplierNumber: { $regex: search, $options: 'i' } },
         { email: { $regex: search, $options: 'i' } },
+        { ccEmails: { $regex: search, $options: 'i' } },
         { phone: { $regex: search, $options: 'i' } },
       ];
     }
@@ -125,6 +152,7 @@ exports.createSupplier = async (req, res) => {
       contactPerson,
       phone,
       email,
+      ccEmails,
       address,
       website,
       abn,
@@ -140,9 +168,12 @@ exports.createSupplier = async (req, res) => {
       });
     }
 
+    const normalizedEmail = normalizeEmail(email);
+    const normalizedCcEmails = normalizeEmailList(ccEmails, normalizedEmail);
+
     // Check if supplier with same email exists
-    if (email) {
-      const existingSupplier = await Supplier.findOne({ email });
+    if (normalizedEmail) {
+      const existingSupplier = await Supplier.findOne({ email: normalizedEmail });
       if (existingSupplier) {
         return res.status(400).json({
           success: false,
@@ -155,7 +186,8 @@ exports.createSupplier = async (req, res) => {
       name,
       contactPerson,
       phone,
-      email,
+      email: normalizedEmail || undefined,
+      ccEmails: normalizedCcEmails,
       address,
       website,
       abn,
@@ -210,6 +242,7 @@ exports.updateSupplier = async (req, res) => {
       contactPerson,
       phone,
       email,
+      ccEmails,
       address,
       website,
       abn,
@@ -227,9 +260,15 @@ exports.updateSupplier = async (req, res) => {
       });
     }
 
+    const normalizedEmail = email !== undefined ? normalizeEmail(email) : undefined;
+    const normalizedCcEmails =
+      ccEmails !== undefined
+        ? normalizeEmailList(ccEmails, normalizedEmail ?? supplier.email)
+        : undefined;
+
     // Check if email is being changed and if it already exists
-    if (email && email !== supplier.email) {
-      const existingSupplier = await Supplier.findOne({ email });
+    if (normalizedEmail && normalizedEmail !== supplier.email) {
+      const existingSupplier = await Supplier.findOne({ email: normalizedEmail });
       if (existingSupplier) {
         return res.status(400).json({
           success: false,
@@ -242,7 +281,8 @@ exports.updateSupplier = async (req, res) => {
     supplier.name = name || supplier.name;
     supplier.contactPerson = contactPerson !== undefined ? contactPerson : supplier.contactPerson;
     supplier.phone = phone || supplier.phone;
-    supplier.email = email !== undefined ? email : supplier.email;
+    supplier.email = normalizedEmail !== undefined ? normalizedEmail : supplier.email;
+    supplier.ccEmails = normalizedCcEmails !== undefined ? normalizedCcEmails : supplier.ccEmails;
     supplier.address = address || supplier.address;
     supplier.website = website !== undefined ? website : supplier.website;
     supplier.abn = abn !== undefined ? abn : supplier.abn;

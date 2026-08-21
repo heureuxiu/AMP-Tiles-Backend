@@ -16,7 +16,7 @@ const connectDB = async () => {
   }
 };
 
-const seedAdmin = async () => {
+const seedUsers = async () => {
   try {
     await connectDB();
 
@@ -45,14 +45,15 @@ const seedAdmin = async () => {
       });
       console.log('Employee user created successfully');
     } else {
+      // Ensure role is employee
       employee.role = 'employee';
       await employee.save();
       console.log('Employee user updated successfully');
     }
 
     console.log('\nUsers configured:');
-    console.log('Admin: admin@amptiles.com.au / admin@amptiles.com.au');
-    console.log('Employee: employee@amptiles.com.au / employee@amptiles.com.au');
+    console.log('1. Admin: admin@amptiles.com.au / admin@amptiles.com.au');
+    console.log('2. Employee: employee@amptiles.com.au / employee@amptiles.com.au');
 
     process.exit();
   } catch (error) {
@@ -61,4 +62,4 @@ const seedAdmin = async () => {
   }
 };
 
-seedAdmin();
+seedUsers();

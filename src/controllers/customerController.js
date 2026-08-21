@@ -589,7 +589,7 @@ exports.getCustomer = async (req, res) => {
 
 exports.createCustomer = async (req, res) => {
   try {
-    const { name, phone, email, ccEmails, abn, address, notes } = req.body;
+    const { name, phone, email, ccEmails, abn, paymentTerms, deliveryMethod, address, notes } = req.body;
     const normalizedEmail = normalizeEmail(email);
     const normalizedCcEmails = normalizeEmailList(ccEmails, normalizedEmail);
 
@@ -616,6 +616,8 @@ exports.createCustomer = async (req, res) => {
       email: normalizedEmail || undefined,
       ccEmails: normalizedCcEmails,
       abn,
+      paymentTerms,
+      deliveryMethod,
       address,
       notes,
       createdBy: req.user.id,
@@ -658,7 +660,7 @@ exports.createCustomer = async (req, res) => {
 
 exports.updateCustomer = async (req, res) => {
   try {
-    const { name, phone, email, ccEmails, abn, address, notes, status } = req.body;
+    const { name, phone, email, ccEmails, abn, paymentTerms, deliveryMethod, address, notes, status } = req.body;
     const normalizedEmail = email !== undefined ? normalizeEmail(email) : undefined;
 
     const customer = await Customer.findById(req.params.id);
@@ -688,6 +690,10 @@ exports.updateCustomer = async (req, res) => {
     customer.email = normalizedEmail !== undefined ? normalizedEmail : customer.email;
     customer.ccEmails = normalizedCcEmails !== undefined ? normalizedCcEmails : customer.ccEmails;
     customer.abn = abn !== undefined ? abn : customer.abn;
+    customer.paymentTerms =
+      paymentTerms !== undefined ? paymentTerms : customer.paymentTerms;
+    customer.deliveryMethod =
+      deliveryMethod !== undefined ? deliveryMethod : customer.deliveryMethod;
     customer.address = address || customer.address;
     customer.notes = notes !== undefined ? notes : customer.notes;
     customer.status = status || customer.status;

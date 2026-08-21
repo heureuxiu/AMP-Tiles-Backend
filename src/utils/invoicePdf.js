@@ -237,6 +237,8 @@
         <td class="right">${formatNumber(deliveryCost)}</td>
       </tr>` : '';
 
+    const hidePaymentDetails = Boolean(options && options.hidePaymentDetails);
+
     return `
   <!DOCTYPE html>
   <html>
@@ -298,266 +300,257 @@
         font-size: 14px;
         margin-bottom: 2px;
       }
-      .customer-block p {
-        margin: 1px 0;
-        font-size: 12.5px;
-        color: #333;
-      }
-      .meta-company-table {
-        border-collapse: collapse;
-        font-size: 12.5px;
-      }
-      .meta-company-table td {
-        border: 1px solid #bbb;
-        padding: 5px 10px;
-        vertical-align: top;
-      }
-      .meta-company-table .label-col {
-        font-weight: 600;
+      .customer-block .cust-detail {
+        font-size: 11.5px;
         color: #444;
-        white-space: nowrap;
-        background: #fafafa;
+        line-height: 1.4;
       }
-      .meta-company-table .value-col {
-        min-width: 100px;
+      .meta-block {
+        text-align: right;
+        font-size: 12px;
       }
-      .meta-company-table .company-col {
+      .meta-block table {
+        margin-left: auto;
+        border-collapse: collapse;
+      }
+      .meta-block td {
+        padding: 2px 0 2px 14px;
+      }
+      .meta-block td.label {
         font-weight: 600;
+        color: #555;
+      }
+      .meta-block td.value {
+        font-weight: 700;
         color: #1a1a2e;
-        min-width: 140px;
+      }
+      .meta-company-name {
+        font-weight: 700;
+        font-size: 12px;
+        color: #1a1a2e;
+        margin-top: 6px;
+      }
+      .meta-company-sub {
+        font-size: 11px;
+        color: #555;
       }
 
       /* ── Items Table ── */
-      table.items {
+      .items-table {
         width: 100%;
         border-collapse: collapse;
-        margin-bottom: 14px;
-        font-size: 12.5px;
+        margin-bottom: 20px;
       }
-      table.items thead {
-        background: #f0f0f4;
-      }
-      table.items th {
-        padding: 9px 10px;
-        text-align: left;
-        font-weight: 700;
-        font-size: 11.5px;
-        color: #333;
-        border: 1px solid #bbb;
-      }
-      table.items th.center, table.items td.center { text-align: center; }
-      table.items th.right, table.items td.right { text-align: right; }
-      table.items td {
+      .items-table th {
+        background-color: #1a1a2e;
+        color: #ffffff;
+        font-weight: 600;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
         padding: 8px 10px;
-        border: 1px solid #ccc;
-        color: #1a1a2e;
+        text-align: left;
       }
-      table.items tbody tr:nth-child(even) {
-        background: #fafafa;
+      .items-table th.center { text-align: center; }
+      .items-table th.right { text-align: right; }
+      .items-table td {
+        padding: 8px 10px;
+        border-bottom: 1px solid #e2e8f0;
+        font-size: 11.5px;
+      }
+      .items-table td.center { text-align: center; }
+      .items-table td.right { text-align: right; }
+      .items-table tr:nth-child(even) td {
+        background-color: #f8fafc;
       }
 
-      /* ── Totals ── */
-      .totals-wrapper {
+      /* ── Totals Block ── */
+      .totals-container {
         display: flex;
         justify-content: flex-end;
-        margin-bottom: 22px;
+        margin-bottom: 24px;
       }
       .totals-table {
+        width: 280px;
         border-collapse: collapse;
-        font-size: 13px;
-        min-width: 300px;
       }
       .totals-table td {
-        padding: 6px 12px;
-        border: 1px solid #bbb;
+        padding: 5px 8px;
+        font-size: 12px;
       }
-      .totals-table .t-label {
+      .totals-table td.t-label {
+        color: #555;
+        font-weight: 500;
+      }
+      .totals-table td.t-value {
         text-align: right;
         font-weight: 600;
-        color: #444;
-        background: #fafafa;
+        color: #1a1a2e;
       }
-      .totals-table .t-value {
-        text-align: right;
-        font-weight: 700;
-        min-width: 110px;
-      }
-      .totals-table .grand-row td {
-        background: #f0f0f4;
-        font-size: 14.5px;
+      .totals-table tr.grand-row td {
+        border-top: 2px solid #1a1a2e;
+        padding-top: 8px;
+        font-size: 14px;
         font-weight: 800;
+      }
+      .totals-table tr.grand-row td.t-label {
+        color: #1a1a2e;
+      }
+      .totals-table tr.grand-row td.t-value {
         color: #1a1a2e;
       }
 
-      /* ── Payment Status ── */
+      /* ── Payment Section ── */
       .payment-section {
-        margin-bottom: 18px;
-        padding: 12px 14px;
-        border: 1px solid #ddd;
+        background-color: #f1f5f9;
         border-radius: 6px;
-        background: #fafafa;
+        padding: 12px 16px;
+        margin-bottom: 24px;
         display: flex;
         justify-content: space-between;
         align-items: center;
-        font-size: 12.5px;
       }
       .payment-section .ps-row {
         display: flex;
-        gap: 20px;
+        gap: 24px;
+        font-size: 12px;
       }
       .payment-section .ps-label {
-        color: #666;
+        color: #64748b;
+        font-weight: 500;
       }
       .payment-section .ps-value {
         font-weight: 700;
+        color: #1a1a2e;
       }
       .badge {
         display: inline-block;
-        padding: 3px 12px;
-        border-radius: 999px;
+        padding: 3px 10px;
+        border-radius: 12px;
         font-size: 11px;
         font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
       }
-      .badge-paid { background: #dcfce7; color: #166534; }
-      .badge-partial { background: #fef3c7; color: #92400e; }
-      .badge-unpaid { background: #fee2e2; color: #991b1b; }
+      .badge-paid { background-color: #dcfce7; color: #166534; }
+      .badge-partial { background-color: #fef9c3; color: #854d0e; }
+      .badge-unpaid { background-color: #fee2e2; color: #991b1b; }
 
-      /* ── Footer / Bank ── */
-      .footer-block {
-        margin-top: 18px;
-        padding-top: 14px;
-        border-top: 2px solid #1a1a2e;
+      /* ── Notes / Bank / T&C ── */
+      .notes-section {
+        font-size: 11px;
+        color: #475569;
+        margin-bottom: 20px;
+        line-height: 1.5;
       }
-      .footer-block p {
-        margin: 2px 0;
-        font-size: 12.5px;
-        color: #333;
+      .footer-block {
+        border-top: 1px solid #cbd5e1;
+        padding-top: 16px;
+        margin-bottom: 20px;
+        font-size: 11.5px;
+        color: #334155;
+        line-height: 1.6;
       }
       .footer-block .due-date {
         font-weight: 700;
-        font-size: 13.5px;
-        margin-bottom: 6px;
+        font-size: 12px;
         color: #1a1a2e;
+        margin-bottom: 6px;
       }
       .footer-note {
-        margin-top: 22px;
-        text-align: center;
-        font-size: 11.5px;
-        color: #888;
-      }
-      .notes-section {
-        margin-top: 14px;
-        padding: 10px 14px;
-        border: 1px solid #ddd;
-        border-radius: 6px;
-        font-size: 12.5px;
-        color: #444;
-        background: #fafafa;
-      }
-      .notes-section strong {
-        color: #222;
-      }
-
-      /* ── Terms and Conditions ── */
-      .tnc-section {
-        margin-top: 30px;
-        padding-top: 20px;
-        border-top: 2px solid #1a1a2e;
-        page-break-before: always;
-      }
-      .tnc-header {
-        font-size: 15px;
-        font-weight: 800;
-        color: #1a1a2e;
-        letter-spacing: 0.5px;
-        margin-bottom: 10px;
-        text-transform: uppercase;
-      }
-      .tnc-intro {
         font-size: 10.5px;
-        color: #333;
-        line-height: 1.6;
-        margin-bottom: 12px;
+        color: #94a3b8;
+        text-align: center;
+        margin-bottom: 24px;
       }
-      .tnc-clause-title {
-        font-size: 11px;
+      .tnc-section {
+        border-top: 1px dashed #cbd5e1;
+        padding-top: 16px;
+        font-size: 9.5px;
+        color: #64748b;
+        line-height: 1.45;
+      }
+      .tnc-title {
         font-weight: 700;
-        color: #1a1a2e;
-        margin-top: 10px;
-        margin-bottom: 4px;
+        font-size: 10.5px;
+        color: #334155;
+        margin-bottom: 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
       }
       .tnc-p {
-        font-size: 10px;
-        color: #444;
-        line-height: 1.55;
-        margin: 2px 0 2px 10px;
+        margin-bottom: 6px;
       }
     </style>
   </head>
   <body>
 
-    <!-- Logo + Title -->
+    <!-- Top: TITLE + LOGO -->
     <div class="top-section">
-      <div class="doc-title">TAX INVOICE</div>
+      <div>
+        <div class="doc-title">TAX INVOICE</div>
+        ${referenceLabel ? `<div class="top-reference"><strong>Reference:</strong> ${escapeHtml(referenceLabel)}</div>` : ''}
+      </div>
       <div class="logo-company">
-        ${logoSrc ? `<img src="${logoSrc}" alt="Logo" />` : ''}
+        ${logoSrc ? `<img src="${logoSrc}" alt="AMP Tiles Logo" />` : ''}
       </div>
     </div>
 
-    <!-- Customer + Meta + Company -->
+    <!-- Header Grid -->
     <div class="header-grid">
       <div class="customer-block">
-        <p class="cust-name">${escapeHtml(inv.customerName || '')}</p>
-        ${deliveryAddress ? `<p><strong>Delivery Address:</strong> ${escapeHtml(deliveryAddress)}</p>` : ''}
-        ${billingAddressLabel ? `<p><strong>Billing Address:</strong> ${escapeHtml(billingAddressLabel)}</p>` : ''}
-        ${inv.customerPhone ? `<p>${escapeHtml(inv.customerPhone)}</p>` : ''}
-        ${inv.customerEmail ? `<p>${escapeHtml(inv.customerEmail)}</p>` : ''}
+        <div class="cust-name">${escapeHtml(inv.customerName || 'Customer')}</div>
+        ${inv.customerEmail ? `<div class="cust-detail">${escapeHtml(inv.customerEmail)}</div>` : ''}
+        ${inv.customerPhone ? `<div class="cust-detail">${escapeHtml(inv.customerPhone)}</div>` : ''}
+        <div class="cust-detail" style="margin-top:6px;">
+          <strong>${escapeHtml(billingAddressLabel)}:</strong><br>
+          ${escapeHtml(billingAddress).replace(/\n/g, '<br>')}
+        </div>
+        ${deliveryAddress ? `
+        <div class="cust-detail" style="margin-top:4px;">
+          <strong>Delivery Address:</strong><br>
+          ${escapeHtml(deliveryAddress).replace(/\n/g, '<br>')}
+        </div>` : ''}
       </div>
-      <table class="meta-company-table">
-        <tr>
-          <td class="label-col">Invoice Date</td>
-          <td class="value-col">${escapeHtml(formatDate(inv.invoiceDate))}</td>
-          <td class="company-col" rowspan="5" style="vertical-align: top; line-height: 1.6;">
-            ${escapeHtml(company.name)}<br>
-            ${escapeHtml(company.addressLine1)}<br>
-            ${escapeHtml(company.addressLine2)}<br>
-            ${escapeHtml(company.addressLine3)}<br>
-            ${escapeHtml(company.country)}
-          </td>
-        </tr>
-        <tr>
-          <td class="label-col">Invoice Number</td>
-          <td class="value-col">${escapeHtml(inv.invoiceNumber || '')}</td>
-        </tr>
-        <tr>
-          <td class="label-col">Reference</td>
-          <td class="value-col">${escapeHtml(referenceLabel)}</td>
-        </tr>
-        <tr>
-          <td class="label-col">Status</td>
-          <td class="value-col">${escapeHtml(invoiceStatusLabel)}</td>
-        </tr>
-        <tr>
-          <td class="label-col">ABN</td>
-          <td class="value-col">${escapeHtml(company.abn)}</td>
-        </tr>
-      </table>
+      <div class="meta-block">
+        <table>
+          <tr>
+            <td class="label">Invoice No:</td>
+            <td class="value">${escapeHtml(inv.invoiceNumber || 'Draft')}</td>
+          </tr>
+          <tr>
+            <td class="label">Date:</td>
+            <td class="value">${escapeHtml(formatDate(inv.invoiceDate))}</td>
+          </tr>
+          <tr>
+            <td class="label">Due Date:</td>
+            <td class="value">${escapeHtml(dueDateLabel)}</td>
+          </tr>
+          <tr>
+            <td class="label">Status:</td>
+            <td class="value">${escapeHtml(invoiceStatusLabel)}</td>
+          </tr>
+        </table>
+        <div class="meta-company-name">${escapeHtml(company.name)}</div>
+        <div class="meta-company-sub">${escapeHtml(company.addressLine1)}, ${escapeHtml(company.addressLine2)} ${escapeHtml(company.addressLine3)}</div>
+        <div class="meta-company-sub">ABN: ${escapeHtml(company.abn)}</div>
+      </div>
     </div>
 
     <!-- Items Table -->
-    <table class="items">
+    <table class="items-table">
       <thead>
         <tr>
-          <th>SKU</th>
-          <th>PRODUCT</th>
-          <th>SIZE</th>
-          <th>UNIT</th>
-          <th class="center">QUANTITY</th>
-          <th class="center">BOX</th>
-          <th class="right">RATE</th>
-          <th class="center">DISC%</th>
-          <th class="center">GST</th>
-          <th class="right">TOTAL EX GST</th>
+          <th>Code</th>
+          <th>Item Description</th>
+          <th>Size</th>
+          <th>Unit</th>
+          <th class="center">Qty</th>
+          <th class="center">Boxes</th>
+          <th class="right">Price Ex</th>
+          <th class="center">Disc %</th>
+          <th class="center">GST %</th>
+          <th class="right">Total Ex GST</th>
         </tr>
       </thead>
       <tbody>
@@ -567,16 +560,13 @@
     </table>
 
     <!-- Totals -->
-    <div class="totals-wrapper">
+    <div class="totals-container">
       <table class="totals-table">
+        ${totalDiscount > 0 ? `
         <tr>
-          <td class="t-label">Gross Amount</td>
-          <td class="t-value">${formatNumber(grossAmount)}</td>
-        </tr>
-        <tr>
-          <td class="t-label">Total Discount</td>
-          <td class="t-value">${formatNumber(totalDiscount)}</td>
-        </tr>
+          <td class="t-label">Discount</td>
+          <td class="t-value">-${formatNumber(totalDiscount)}</td>
+        </tr>` : ''}
         <tr>
           <td class="t-label">Subtotal (Ex GST)</td>
           <td class="t-value">${formatNumber(subtotal)}</td>
@@ -596,8 +586,10 @@
     <div class="payment-section">
       <div class="ps-row">
         <span><span class="ps-label">Total Amount:</span> <span class="ps-value">${formatNumber(grandTotal)}</span></span>
+        ${hidePaymentDetails ? '' : `
         <span><span class="ps-label">Amount Received:</span> <span class="ps-value">${formatNumber(paidCents / 100)}</span></span>
         <span><span class="ps-label">Remaining:</span> <span class="ps-value">${formatNumber(outstandingCents / 100)}</span></span>
+        `}
         ${inv.paymentMethod ? `<span><span class="ps-label">Method:</span> <span class="ps-value">${escapeHtml(String(inv.paymentMethod).replace(/_/g, ' '))}</span></span>` : ''}
       </div>
       <span class="badge ${paymentStatus === 'paid' ? 'badge-paid' : paymentStatus === 'partially_paid' ? 'badge-partial' : 'badge-unpaid'}">${escapeHtml(paymentStatusLabel)}</span>
@@ -693,10 +685,10 @@
   </html>`;
   }
 
-  async function generateInvoicePdf(invoice) {
+  async function generateInvoicePdf(invoice, options = {}) {
     const startedAt = Date.now();
     const puppeteer = getPuppeteer();
-    const html = buildInvoiceHtml(invoice);
+    const html = buildInvoiceHtml(invoice, {}, options);
     let page;
     try {
       const browser = await getReusablePuppeteerBrowser(puppeteer);

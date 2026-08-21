@@ -43,6 +43,11 @@ app.use(
       // Allow exact matches
       if (allowedOrigins.includes(origin)) return callback(null, true);
 
+      // Allow local dev servers on any port.
+      if (/^http:\/\/(?:localhost|127\.0\.0\.1):\d+$/.test(origin)) {
+        return callback(null, true);
+      }
+
       // Allow Vercel preview URLs (optional but helpful)
       if (/^https:\/\/.*\.vercel\.app$/.test(origin)) return callback(null, true);
 

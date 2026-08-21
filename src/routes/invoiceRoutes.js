@@ -11,7 +11,7 @@ const {
   deleteInvoice,
   getInvoiceStats,
 } = require('../controllers/invoiceController');
-const { protect } = require('../middleware/auth');
+const { protect, authorize } = require('../middleware/auth');
 const { uploadEmailAttachments } = require('../middleware/emailAttachments');
 
 const router = express.Router();
@@ -30,10 +30,13 @@ router.get('/:id/pdf', getInvoicePdf);
 router.get('/:id/packing-slip', getPackingSlipPdf);
 
 // Individual invoice routes
-router.route('/:id').get(getInvoice).put(uploadEmailAttachments, updateInvoice).delete(deleteInvoice);
+router.route('/:id')
+  .get(getInvoice)
+  .put(uploadEmailAttachments, updateInvoice)
+  .delete(authorize('admin'), deleteInvoice);
 
 // Mark as paid route
-router.post('/:id/pay', markInvoiceAsPaid);
+router.post('/:id/pay', authorize('admin'), markInvoiceAsPaid);
 router.post('/:id/send', uploadEmailAttachments, sendInvoiceEmail);
 
 module.exports = router;

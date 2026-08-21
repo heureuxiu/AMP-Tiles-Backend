@@ -182,6 +182,27 @@ function summarizeEmailError(error, fallbackMessage = 'Failed to send purchase o
     .join(' | ');
 }
 
+function parseEmailList(values) {
+  const rawValues = Array.isArray(values) ? values : [values];
+  const normalized = [];
+  const seen = new Set();
+
+  for (const rawValue of rawValues) {
+    const parts = String(rawValue || '')
+      .split(/[,\n;\s]+/g)
+      .map((part) => normalizeEmail(part))
+      .filter(Boolean);
+
+    for (const email of parts) {
+      if (seen.has(email)) continue;
+      seen.add(email);
+      normalized.push(email);
+    }
+  }
+
+  return normalized;
+}
+
 async function sendPurchaseOrderEmailWithAttachment(purchaseOrderDoc) {
   const purchaseOrder = purchaseOrderDoc?.toObject
     ? purchaseOrderDoc.toObject()
@@ -200,6 +221,9 @@ async function sendPurchaseOrderEmailWithAttachment(purchaseOrderDoc) {
     error.statusCode = 400;
     throw error;
   }
+  const ccEmails = parseEmailList(purchaseOrder?.supplier?.ccEmails || []).filter(
+    (email) => email !== supplierEmail
+  );
 
   const pdfBuffer = await generatePurchaseOrderPdf(purchaseOrder);
   const emailPayload = buildPurchaseOrderEmail(purchaseOrder);
@@ -210,6 +234,7 @@ async function sendPurchaseOrderEmailWithAttachment(purchaseOrderDoc) {
 
   await sendEmail({
     to: supplierEmail,
+    cc: ccEmails.length > 0 ? ccEmails.join(', ') : undefined,
     subject: emailPayload.subject,
     text: emailPayload.text,
     html: emailPayload.html,
@@ -224,6 +249,7 @@ async function sendPurchaseOrderEmailWithAttachment(purchaseOrderDoc) {
 
   return {
     supplierEmail,
+    ccEmails,
     emailPayload,
   };
 }
@@ -906,7 +932,7 @@ exports.getPurchaseOrderPdf = async (req, res) => {
 exports.sendPurchaseOrderToSupplier = async (req, res) => {
   try {
     const purchaseOrder = await PurchaseOrder.findById(req.params.id)
-      .populate('supplier', 'name email contactPerson supplierNumber')
+      .populate('supplier', 'name email ccEmails contactPerson supplierNumber')
       .populate('createdBy', 'name email')
       .populate(
         'items.product',
@@ -943,12 +969,12 @@ exports.sendPurchaseOrderToSupplier = async (req, res) => {
       });
     }
 
-    await sendPurchaseOrderEmailWithAttachment(purchaseOrder);
+    const { ccEmails } = await sendPurchaseOrderEmailWithAttachment(purchaseOrder);
 
     if (purchaseOrder.status !== 'sent_to_supplier') {
       purchaseOrder.status = 'sent_to_supplier';
       await purchaseOrder.save();
-      await purchaseOrder.populate('supplier', 'name email contactPerson supplierNumber');
+      await purchaseOrder.populate('supplier', 'name email ccEmails contactPerson supplierNumber');
       await purchaseOrder.populate('createdBy', 'name email');
       await purchaseOrder.populate(
         'items.product',
@@ -959,7 +985,9 @@ exports.sendPurchaseOrderToSupplier = async (req, res) => {
     res.status(200).json({
       success: true,
       emailSent: true,
-      message: `Purchase order sent to supplier at ${supplierEmail}`,
+      message: `Purchase order sent to supplier at ${supplierEmail}${
+        ccEmails.length > 0 ? ` (cc: ${ccEmails.join(', ')})` : ''
+      }`,
       purchaseOrder,
     });
   } catch (error) {

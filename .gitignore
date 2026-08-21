@@ -2,8 +2,14 @@ node_modules/
 .env
 .env.local
 .env.production
+.env.*.local
 .cache/
 dist/
 build/
 *.log
 .DS_Store
+uploads/*
+!uploads/.gitkeep
+!uploads/email-attachments/
+uploads/email-attachments/*
+!uploads/email-attachments/.gitkeep

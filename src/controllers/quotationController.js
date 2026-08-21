@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const Quotation = require('../models/Quotation');
 const Product = require('../models/Product');
 const Invoice = require('../models/Invoice');
+const Customer = require('../models/Customer');
 const StockTransaction = require('../models/StockTransaction');
 const { generateQuotationPdf } = require('../utils/quotationPdf');
 const { buildEmailAttachments } = require('../middleware/emailAttachments');
@@ -80,6 +81,26 @@ function calculateQuotationGrandTotal({ subtotal, discount, tax, deliveryCost })
       normalizedDeliveryCost +
       deliveryGst
   );
+}
+
+function parsePaymentTermDays(paymentTerms) {
+  const normalized = String(paymentTerms || '').trim().toLowerCase();
+  if (!normalized || normalized.includes('receipt') || normalized.includes('cod')) return 0;
+
+  const netMatch = normalized.match(/\bnet\s*(\d{1,3})\b/);
+  if (netMatch) return Number(netMatch[1]);
+
+  const dayMatch = normalized.match(/\b(\d{1,3})\s*(?:day|days)\b/);
+  if (dayMatch) return Number(dayMatch[1]);
+
+  return 0;
+}
+
+function addDays(dateValue, days) {
+  const date = new Date(dateValue || Date.now());
+  if (Number.isNaN(date.getTime())) return new Date();
+  date.setDate(date.getDate() + Math.max(0, Number(days) || 0));
+  return date;
 }
 
 function getQuotationAmountSnapshot(quotation) {
@@ -498,13 +519,14 @@ exports.getQuotations = async (req, res) => {
     if (search) {
       query.$or = [
         { quotationNumber: { $regex: search, $options: 'i' } },
+        { reference: { $regex: search, $options: 'i' } },
         { customerName: { $regex: search, $options: 'i' } },
         { customerEmail: { $regex: search, $options: 'i' } },
       ];
     }
     
     // Filter by status
-    if (status) {
+    if (status && status !== 'all') {
       query.status = status;
     }
     
@@ -551,7 +573,9 @@ exports.getQuotations = async (req, res) => {
       converted: statsSource.filter(q => q.status === 'converted').length,
       expired: statsSource.filter(q => q.status === 'expired').length,
       cancelled: statsSource.filter(q => q.status === 'cancelled').length,
-      totalValue: statsSource.reduce((sum, q) => sum + (Number(q.grandTotal) || 0), 0),
+      totalValue: statsSource
+        .filter((q) => q.status !== 'cancelled')
+        .reduce((sum, q) => sum + (Number(q.grandTotal) || 0), 0),
     };
 
     res.status(200).json({
@@ -1737,6 +1761,18 @@ exports.convertToInvoice = async (req, res) => {
     // (excludes this quotation's own hold so conversion is always possible)
     await validateStockAndLoadProducts(invoiceItems, { excludeQuotationId: quotation._id });
 
+    const customerLookup = [
+      quotation.customerEmail ? { email: normalizeEmail(quotation.customerEmail) } : null,
+      quotation.customerName ? { name: quotation.customerName } : null,
+    ].filter(Boolean);
+    const matchedCustomer =
+      customerLookup.length > 0
+        ? await Customer.findOne({ $or: customerLookup }).lean()
+        : null;
+    const invoiceDate = new Date();
+    const paymentTerms = String(matchedCustomer?.paymentTerms || quotation.terms || '').trim();
+    const dueDate = addDays(invoiceDate, parsePaymentTermDays(paymentTerms));
+
     // Create actual Invoice from quotation data
     const invoice = await Invoice.create({
       quotation: quotation._id,
@@ -1749,8 +1785,8 @@ exports.convertToInvoice = async (req, res) => {
       ),
       customerAddress: quotation.customerAddress,
       deliveryAddress: getDeliveryAddress(quotation) || undefined,
-      invoiceDate: quotation.quotationDate || new Date(),
-      dueDate: quotation.validUntil,
+      invoiceDate,
+      dueDate,
       items: invoiceItems,
       // Quotation line items already include discount in lineTotal; GST is calculated separately.
       // Keep invoice-level discount neutral to prevent double-application.
@@ -1759,7 +1795,7 @@ exports.convertToInvoice = async (req, res) => {
       taxRate: quotation.taxRate || 10,
       deliveryCost: normalizeDeliveryCost(quotation.deliveryCost),
       notes: quotation.notes,
-      terms: quotation.terms,
+      terms: paymentTerms || quotation.terms,
       status: 'confirmed',
       createdBy: req.user.id,
     });
@@ -1864,7 +1900,9 @@ exports.getQuotationStats = async (req, res) => {
       }
     });
 
-    const totalValue = stats.reduce((sum, stat) => sum + stat.totalValue, 0);
+    const totalValue = stats
+      .filter((stat) => stat._id !== 'cancelled')
+      .reduce((sum, stat) => sum + stat.totalValue, 0);
 
     res.status(200).json({
       success: true,

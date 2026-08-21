@@ -30,6 +30,24 @@ const supplierSchema = new mongoose.Schema(
         'Please provide a valid email',
       ],
     },
+    ccEmails: {
+      type: [String],
+      default: [],
+      set: (emails) =>
+        Array.isArray(emails)
+          ? emails
+              .map((email) => String(email || '').trim().toLowerCase())
+              .filter(Boolean)
+          : [],
+      validate: {
+        validator(emails) {
+          return (emails || []).every((email) =>
+            /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/.test(email)
+          );
+        },
+        message: 'Please provide valid CC email addresses',
+      },
+    },
     address: {
       street: { type: String, trim: true },
       city: { type: String, trim: true },
@@ -109,6 +127,7 @@ supplierSchema.pre('save', async function () {
 // Indexes for better query performance
 supplierSchema.index({ name: 1 });
 supplierSchema.index({ email: 1 });
+supplierSchema.index({ ccEmails: 1 });
 supplierSchema.index({ status: 1 });
 supplierSchema.index({ createdAt: -1 });
 

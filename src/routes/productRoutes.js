@@ -8,7 +8,7 @@ const {
   updateStock,
   importCsvProducts,
 } = require('../controllers/productController');
-const { protect } = require('../middleware/auth');
+const { protect, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -17,14 +17,20 @@ router.use(protect);
 
 router.post(
   '/import-csv',
+  authorize('admin'),
   express.text({ type: ['text/csv', 'application/csv', 'text/plain'], limit: '5mb' }),
   importCsvProducts
 );
 
-router.route('/').get(getProducts).post(createProduct);
+router.route('/')
+  .get(getProducts)
+  .post(authorize('admin'), createProduct);
 
-router.route('/:id').get(getProduct).put(updateProduct).delete(deleteProduct);
+router.route('/:id')
+  .get(getProduct)
+  .put(authorize('admin'), updateProduct)
+  .delete(authorize('admin'), deleteProduct);
 
-router.patch('/:id/stock', updateStock);
+router.patch('/:id/stock', authorize('admin'), updateStock);
 
 module.exports = router;

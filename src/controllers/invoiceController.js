@@ -905,20 +905,49 @@ exports.getInvoices = async (req, res) => {
       limit,
     } = req.query;
     const query = {};
+    const conditions = [];
 
     if (search) {
-      query.$or = [
-        { invoiceNumber: { $regex: search, $options: 'i' } },
-        { customerName: { $regex: search, $options: 'i' } },
-        { customerPhone: { $regex: search, $options: 'i' } },
-        { customerEmail: { $regex: search, $options: 'i' } },
-      ];
+      conditions.push({
+        $or: [
+          { invoiceNumber: { $regex: search, $options: 'i' } },
+          { reference: { $regex: search, $options: 'i' } },
+          { customerName: { $regex: search, $options: 'i' } },
+          { customerPhone: { $regex: search, $options: 'i' } },
+          { customerEmail: { $regex: search, $options: 'i' } },
+        ],
+      });
     }
-    if (status && status !== 'all') query.status = status;
+    if (status && status !== 'all') {
+      if (status === 'paid') {
+        conditions.push({
+          $or: [{ status: 'paid' }, { paymentStatus: 'paid' }],
+        });
+      } else if (status === 'partially_paid') {
+        conditions.push({
+          paymentStatus: 'partially_paid',
+        });
+      } else if (status === 'unpaid') {
+        conditions.push({
+          $and: [
+            { status: { $ne: 'paid' } },
+            { paymentStatus: { $ne: 'paid' } },
+            { paymentStatus: { $ne: 'partially_paid' } },
+          ],
+        });
+      } else {
+        conditions.push({ status: status });
+      }
+    }
     if (startDate || endDate) {
-      query.invoiceDate = {};
-      if (startDate) query.invoiceDate.$gte = new Date(startDate);
-      if (endDate) query.invoiceDate.$lte = new Date(endDate);
+      const dateCond = {};
+      if (startDate) dateCond.$gte = new Date(startDate);
+      if (endDate) dateCond.$lte = new Date(endDate);
+      conditions.push({ invoiceDate: dateCond });
+    }
+
+    if (conditions.length > 0) {
+      query.$and = conditions;
     }
 
     const sort = {};
@@ -964,7 +993,12 @@ exports.getInvoices = async (req, res) => {
       const grandTotal = Math.round((itemsPreTax - discountAmount + itemsGst + deliveryCost + deliveryGst) * 100) / 100;
       const amountPaid = Math.max(0, Number(obj.amountPaid) || 0);
       const remainingBalance = Math.max(0, Math.round((grandTotal - amountPaid) * 100) / 100);
-      return { ...obj, grandTotal, remainingBalance };
+      const result = { ...obj, grandTotal, remainingBalance };
+      if (req.user && req.user.role === 'employee') {
+        delete result.amountPaid;
+        delete result.remainingBalance;
+      }
+      return result;
     };
     const correctedInvoices = invoices.map(correctInvoiceAmounts);
     const correctedStatsInvoices = statsInvoices.map(correctInvoiceAmounts);
@@ -974,12 +1008,17 @@ exports.getInvoices = async (req, res) => {
     statuses.forEach(s => {
       stats[s] = correctedStatsInvoices.filter(inv => inv.status === s).length;
     });
-    stats.totalRevenue = correctedStatsInvoices
-      .filter(inv => inv.paymentStatus === 'paid' || inv.status === 'paid')
-      .reduce((sum, inv) => sum + (inv.grandTotal || 0), 0);
-    stats.pendingAmount = correctedStatsInvoices
-      .filter(inv => inv.paymentStatus !== 'paid' && inv.status !== 'cancelled')
-      .reduce((sum, inv) => sum + (inv.remainingBalance || inv.grandTotal || 0), 0);
+    if (req.user && req.user.role === 'employee') {
+      stats.totalRevenue = 0;
+      stats.pendingAmount = 0;
+    } else {
+      stats.totalRevenue = correctedStatsInvoices
+        .filter(inv => inv.status !== 'cancelled')
+        .reduce((sum, inv) => sum + (Number(inv.amountPaid) || 0), 0);
+      stats.pendingAmount = correctedStatsInvoices
+        .filter(inv => inv.status !== 'cancelled')
+        .reduce((sum, inv) => sum + (Number(inv.remainingBalance) || 0), 0);
+    }
 
     res.status(200).json({
       success: true,
@@ -1017,7 +1056,17 @@ exports.getInvoice = async (req, res) => {
     if (!invoice) {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
-    res.status(200).json({ success: true, invoice });
+
+    const invoiceObj = invoice.toObject();
+    if (req.user && req.user.role === 'employee') {
+      delete invoiceObj.amountPaid;
+      delete invoiceObj.remainingBalance;
+    }
+
+    res.status(200).json({
+      success: true,
+      invoice: invoiceObj,
+    });
   } catch (error) {
     console.error('Get invoice error:', error);
     res.status(500).json({
@@ -1444,6 +1493,7 @@ exports.sendInvoiceEmail = async (req, res) => {
     }
 
     const { customerEmail, ccEmails, emailPayload } = await sendInvoiceEmailWithAttachment(invoice, {
+      ccEmails: req.body?.ccEmails,
       extraAttachments: buildEmailAttachments(req.files),
     });
     await Invoice.findByIdAndUpdate(invoice._id, { emailSent: true, lastEmailedAt: new Date() });
@@ -1482,7 +1532,8 @@ exports.getInvoicePdf = async (req, res) => {
     if (!invoice) {
       return res.status(404).json({ success: false, message: 'Invoice not found' });
     }
-    const pdfBuffer = await generateInvoicePdf(invoice);
+    const hidePaymentDetails = Boolean(req.user && req.user.role === 'employee');
+    const pdfBuffer = await generateInvoicePdf(invoice, { hidePaymentDetails });
     const filename = `invoice-${invoice.invoiceNumber || invoice._id}.pdf`.replace(/\s/g, '-');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -1581,15 +1632,25 @@ exports.getInvoiceStats = async (req, res) => {
     statuses.forEach(s => {
       stats[s] = invoices.filter(inv => inv.status === s).length;
     });
-    stats.totalRevenue = invoices
-      .filter(inv => inv.paymentStatus === 'paid' || inv.status === 'paid')
-      .reduce((sum, inv) => sum + (inv.grandTotal || inv.paidAmount || 0), 0);
-    stats.pendingAmount = invoices
-      .filter(inv => inv.paymentStatus !== 'paid' && inv.status !== 'cancelled')
-      .reduce((sum, inv) => sum + (inv.remainingBalance || inv.grandTotal || 0), 0);
-    stats.overdueAmount = invoices
-      .filter(inv => inv.status === 'overdue')
-      .reduce((sum, inv) => sum + (inv.grandTotal || 0), 0);
+    if (req.user && req.user.role === 'employee') {
+      stats.totalRevenue = 0;
+      stats.pendingAmount = 0;
+      stats.overdueAmount = 0;
+    } else {
+      stats.totalRevenue = invoices
+        .filter(inv => inv.status !== 'cancelled')
+        .reduce((sum, inv) => sum + (Number(inv.amountPaid) || 0), 0);
+      stats.pendingAmount = invoices
+        .filter(inv => inv.status !== 'cancelled')
+        .reduce((sum, inv) => {
+          const grandTotal = Number(inv.grandTotal) || 0;
+          const amountPaid = Number(inv.amountPaid) || 0;
+          return sum + Math.max(0, Math.round((grandTotal - amountPaid) * 100) / 100);
+        }, 0);
+      stats.overdueAmount = invoices
+        .filter(inv => inv.status === 'overdue')
+        .reduce((sum, inv) => sum + (inv.grandTotal || 0), 0);
+    }
     res.status(200).json({ success: true, stats });
   } catch (error) {
     console.error('Get invoice stats error:', error);
