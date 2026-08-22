@@ -20,18 +20,16 @@ jobs:
           role-to-assume: arn:aws:iam::139438595458:role/github-actions-eb-deploy-role
           aws-region: ap-southeast-2
 
-      - name: Install dependencies
-        run: npm install
-
-      - name: Generate deployment package
-        run: zip -r deploy.zip . -x "node_modules/*" ".git/*"
-
-      - name: Deploy to EB
-        uses: einaregilsson/beanstalk-deploy@v22
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          application_name: amp-tiles-server
-          environment_name: amp-tiles-server-env
-          version_label: ${{ github.sha }}
-          region: ap-southeast-2
-          deployment_package: deploy.zip
-          use_existing_version_if_available: true
+          python-version: '3.x'
+
+      - name: Install EB CLI
+        run: pip install awsebcli
+
+      - name: Deploy to Elastic Beanstalk
+        run: |
+          eb init amp-tiles-server --region ap-southeast-2 --platform node.js
+          eb use amp-tiles-server-env
+          eb deploy --staged
