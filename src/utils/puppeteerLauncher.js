@@ -5,7 +5,10 @@ const { promisify } = require('util');
 
 const execAsync = promisify(exec);
 
-const DEFAULT_CACHE_DIR = path.resolve(__dirname, '../../.cache/puppeteer');
+// Support both project-root .cache and HOME-based cache (Render sets HOME=/opt/render)
+const DEFAULT_CACHE_DIR =
+  process.env.PUPPETEER_CACHE_DIR ||
+  path.resolve(__dirname, '../../.cache/puppeteer');
 const INSTALL_TIMEOUT_MS = 5 * 60 * 1000;
 const INSTALL_MAX_BUFFER = 10 * 1024 * 1024;
 
@@ -64,13 +67,35 @@ function withCacheDirEnv() {
   };
 }
 
+// Comprehensive args for headless Chrome on cloud/container environments
+// (Render, Railway, Heroku, AWS EB, Docker, etc.)
+const CHROME_ARGS = [
+  '--no-sandbox',
+  '--disable-setuid-sandbox',
+  '--disable-dev-shm-usage',
+  '--disable-gpu',
+  '--no-zygote',
+  '--single-process',
+  '--disable-extensions',
+  '--disable-software-rasterizer',
+  '--disable-background-networking',
+  '--disable-default-apps',
+  '--disable-sync',
+  '--disable-translate',
+  '--hide-scrollbars',
+  '--metrics-recording-only',
+  '--mute-audio',
+  '--no-first-run',
+  '--safebrowsing-disable-auto-update',
+];
+
 function getLaunchOptions(puppeteer, executablePath) {
   const options = {
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    headless: 'new',
+    args: CHROME_ARGS,
   };
 
-  // 1. Explicit env override
+  // 1. Explicit env override (highest priority)
   const envPath = process.env.PUPPETEER_EXECUTABLE_PATH || process.env.CHROME_PATH || '';
   if (envPath) {
     options.executablePath = envPath;
@@ -83,13 +108,42 @@ function getLaunchOptions(puppeteer, executablePath) {
     return options;
   }
 
-  // 3. Puppeteer bundled browser path
+  // 3. Puppeteer bundled browser — try executablePath() first
   if (typeof puppeteer.executablePath === 'function') {
     try {
       const detectedPath = puppeteer.executablePath();
-      if (detectedPath) options.executablePath = detectedPath;
+      if (detectedPath && fs.existsSync(detectedPath)) {
+        options.executablePath = detectedPath;
+        return options;
+      }
     } catch (_) {}
   }
+
+  // 4. Try to locate Chrome in the puppeteer cache directory explicitly
+  try {
+    const cacheDir = getCacheDir();
+    // puppeteer v20+ stores chrome in <cacheDir>/chrome/<platform>-<revision>/
+    if (fs.existsSync(cacheDir)) {
+      const chromeDirs = fs.readdirSync(cacheDir).filter((d) => d.startsWith('chrome'));
+      for (const dir of chromeDirs) {
+        const sub = path.join(cacheDir, dir);
+        const revDirs = fs.existsSync(sub) ? fs.readdirSync(sub) : [];
+        for (const rev of revDirs) {
+          const candidates = [
+            path.join(sub, rev, 'chrome-linux64', 'chrome'),
+            path.join(sub, rev, 'chrome-linux', 'chrome'),
+            path.join(sub, rev, 'chrome'),
+          ];
+          for (const c of candidates) {
+            if (fs.existsSync(c)) {
+              options.executablePath = c;
+              return options;
+            }
+          }
+        }
+      }
+    }
+  } catch (_) {}
 
   return options;
 }
