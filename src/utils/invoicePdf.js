@@ -142,7 +142,7 @@
     return readLogoBase64();
   }
 
-  function buildInvoiceHtml(invoice, companyInfo = {}) {
+  function buildInvoiceHtml(invoice, companyInfo = {}, options = {}) {
     const company = {
       name: companyInfo.name || 'AMP TILES PTY LTD',
       addressLine1: companyInfo.addressLine1 || 'Unit 15/55 Anderson Road',
