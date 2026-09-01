@@ -691,23 +691,7 @@ async function assertStockAvailabilityForItems(items, options = {}) {
     { excludeQuotationId }
   );
 
-  for (const [productId, requestedQty] of requestedByProduct.entries()) {
-    const product = productMap.get(productId);
-    if (!product || !isOwnStockProduct(product)) continue;
-
-    const onHandQty = roundQty(product.stock);
-    const heldQty = roundQty(heldByProduct.get(productId));
-    const availableQty = roundQty(Math.max(0, onHandQty - heldQty));
-
-    if (requestedQty > availableQty + 0.0001) {
-      const unitLabel = product.unit || 'units';
-      throw createStockValidationError(
-        `Insufficient stock for ${product.name}. On hand: ${formatStockQty(onHandQty)} ${unitLabel}, Held in quotations: ${formatStockQty(heldQty)} ${unitLabel}, Available: ${formatStockQty(availableQty)} ${unitLabel}, Requested: ${formatStockQty(requestedQty)} ${unitLabel}`,
-        400
-      );
-    }
-  }
-
+  // Stock availability check bypassed - return product map and requested quantities directly
   return { requestedByProduct, productMap };
 }
 
@@ -1161,6 +1145,8 @@ exports.createInvoice = async (req, res) => {
       deliveryCost: normalizeDeliveryCost(deliveryCost),
       notes,
       terms,
+      recipientType: req.body.recipientType || (req.body.isOneTimeCustomer ? 'one-time' : 'customer'),
+      isOneTimeCustomer: Boolean(req.body.isOneTimeCustomer || req.body.recipientType === 'one-time'),
       status,
       paymentMethod: paymentMethod || '',
       amountPaid: pickFirstFiniteNumber([amountPaid], 0),
@@ -1207,9 +1193,9 @@ exports.createInvoice = async (req, res) => {
     });
   } catch (error) {
     console.error('Create invoice error:', error);
-    res.status(error.statusCode || 500).json({
+    res.status(error.statusCode || 400).json({
       success: false,
-      message: 'Server error while creating invoice',
+      message: error.message || 'Failed to create invoice',
       error: error.message,
     });
   }
@@ -1271,10 +1257,20 @@ exports.updateInvoice = async (req, res) => {
       : [];
 
     const oldStatus = invoice.status;
-    const willConfirmOrDeliver = newStatus === 'confirmed' || newStatus === 'delivered';
+    const effectiveStatus = newStatus || oldStatus;
+    const willConfirmOrDeliver = effectiveStatus === 'confirmed' || effectiveStatus === 'delivered';
     const wasConfirmedOrDelivered = oldStatus === 'confirmed' || oldStatus === 'delivered';
+    const itemsChanged = items && Array.isArray(items) && items.length > 0;
 
-    if (items && items.length > 0 && oldStatus === 'draft') {
+    if (itemsChanged) {
+      // If the invoice was already confirmed/delivered, restore stock for old items first
+      if (wasConfirmedOrDelivered) {
+        await restoreStockForInvoice(invoice, {
+          actorId: req.user.id,
+          reason: 'invoice items updated',
+        });
+      }
+
       const populatedItems = [];
       for (const item of items) {
         const product = await Product.findById(item.product);
@@ -1320,6 +1316,13 @@ exports.updateInvoice = async (req, res) => {
     if (notes !== undefined) invoice.notes = notes;
     if (terms !== undefined) invoice.terms = terms;
     if (paymentMethod !== undefined) invoice.paymentMethod = paymentMethod;
+    if (req.body.recipientType !== undefined) {
+      invoice.recipientType = req.body.recipientType;
+      invoice.isOneTimeCustomer = req.body.recipientType === 'one-time';
+    } else if (req.body.isOneTimeCustomer !== undefined) {
+      invoice.isOneTimeCustomer = Boolean(req.body.isOneTimeCustomer);
+      if (invoice.isOneTimeCustomer) invoice.recipientType = 'one-time';
+    }
     if (amountPaid !== undefined) {
       invoice.amountPaid = pickFirstFiniteNumber([amountPaid], invoice.amountPaid || 0);
     }
@@ -1334,11 +1337,22 @@ exports.updateInvoice = async (req, res) => {
       });
     }
 
-    // Status change: stock only on confirmed/delivered
     if (newStatus) {
+      invoice.status = newStatus;
+    }
+
+    await invoice.save();
+
+    // Now handle stock deduction for items if the final invoice is confirmed or delivered
+    if (itemsChanged) {
+      if (willConfirmOrDeliver) {
+        await decreaseStockForInvoice(invoice, {
+          excludeQuotationId: invoice.quotation,
+          actorId: req.user.id,
+        });
+      }
+    } else if (newStatus && newStatus !== oldStatus) {
       if (willConfirmOrDeliver && !wasConfirmedOrDelivered) {
-        invoice.status = newStatus;
-        await invoice.save();
         await decreaseStockForInvoice(invoice, {
           excludeQuotationId: invoice.quotation,
           actorId: req.user.id,
@@ -1348,14 +1362,7 @@ exports.updateInvoice = async (req, res) => {
           actorId: req.user.id,
           reason: `status changed to ${newStatus}`,
         });
-        invoice.status = newStatus;
-        await invoice.save();
-      } else {
-        invoice.status = newStatus;
-        await invoice.save();
       }
-    } else {
-      await invoice.save();
     }
 
     const updatedInvoice = await Invoice.findById(invoice._id)
@@ -1392,9 +1399,9 @@ exports.updateInvoice = async (req, res) => {
     });
   } catch (error) {
     console.error('Update invoice error:', error);
-    res.status(error.statusCode || 500).json({
+    res.status(error.statusCode || 400).json({
       success: false,
-      message: 'Server error while updating invoice',
+      message: error.message || 'Failed to update invoice',
       error: error.message,
     });
   }
@@ -1460,9 +1467,9 @@ exports.markInvoiceAsPaid = async (req, res) => {
     });
   } catch (error) {
     console.error('Mark invoice as paid error:', error);
-    res.status(500).json({
+    res.status(error.statusCode || 400).json({
       success: false,
-      message: 'Server error while updating payment',
+      message: error.message || 'Failed to update payment',
       error: error.message,
     });
   }

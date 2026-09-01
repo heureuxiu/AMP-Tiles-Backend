@@ -1,6 +1,7 @@
 const express = require('express');
 const {
   getCustomers,
+  getOneTimeCustomers,
   getCustomer,
   createCustomer,
   updateCustomer,
@@ -17,6 +18,7 @@ const router = express.Router();
 router.use(protect);
 
 router.get('/stats/summary', authorize('admin'), getCustomerStats);
+router.get('/one-time', getOneTimeCustomers);
 
 router.route('/')
   .get(getCustomers)

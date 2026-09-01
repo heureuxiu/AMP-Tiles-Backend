@@ -191,6 +191,15 @@ const quotationSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Invoice',
     },
+    recipientType: {
+      type: String,
+      enum: ['customer', 'supplier', 'one-time'],
+      default: 'customer',
+    },
+    isOneTimeCustomer: {
+      type: Boolean,
+      default: false,
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

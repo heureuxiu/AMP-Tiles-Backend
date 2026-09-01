@@ -1178,30 +1178,7 @@ async function getHeldQuantitiesByProduct(productIds, options = {}) {
 }
 
 async function assertRequestedStockAvailability(requestedByProduct, productMap, options = {}) {
-  const heldByProduct = await getHeldQuantitiesByProduct(
-    Array.from(requestedByProduct.keys()),
-    options
-  );
-
-  for (const [productId, requestedQty] of requestedByProduct.entries()) {
-    const product = productMap.get(productId);
-
-    if (!product) {
-      throw createStockValidationError(`Product not found: ${productId}`, 404);
-    }
-
-    const onHandQty = roundQty(product.stock);
-    const heldQty = roundQty(heldByProduct.get(productId));
-    const availableQty = roundQty(Math.max(0, onHandQty - heldQty));
-
-    if (requestedQty > availableQty + 0.0001) {
-      const unitLabel = product.unit || 'units';
-      throw createStockValidationError(
-        `Insufficient stock for ${product.name}. On hand: ${formatStockQty(onHandQty)} ${unitLabel}, Held in quotations: ${formatStockQty(heldQty)} ${unitLabel}, Available: ${formatStockQty(availableQty)} ${unitLabel}, Requested: ${formatStockQty(requestedQty)} ${unitLabel}`,
-        400
-      );
-    }
-  }
+  // Stock availability check bypassed - quotation creation allowed without stock restrictions
 }
 
 async function validateStockAndLoadProducts(items, options = {}) {
@@ -1415,6 +1392,8 @@ exports.createQuotation = async (req, res) => {
       grandTotal,
       notes,
       terms,
+      recipientType: req.body.recipientType || (req.body.isOneTimeCustomer ? 'one-time' : 'customer'),
+      isOneTimeCustomer: Boolean(req.body.isOneTimeCustomer || req.body.recipientType === 'one-time'),
       status: status || 'draft',
       createdBy: req.user.id,
     });
@@ -1638,6 +1617,13 @@ exports.updateQuotation = async (req, res) => {
     if (deliveryCost !== undefined) {
       quotation.deliveryCost = normalizeDeliveryCost(deliveryCost);
     }
+    if (req.body.recipientType !== undefined) {
+      quotation.recipientType = req.body.recipientType;
+      quotation.isOneTimeCustomer = req.body.recipientType === 'one-time';
+    } else if (req.body.isOneTimeCustomer !== undefined) {
+      quotation.isOneTimeCustomer = Boolean(req.body.isOneTimeCustomer);
+      if (quotation.isOneTimeCustomer) quotation.recipientType = 'one-time';
+    }
     if (status) quotation.status = status;
     if (hasAttachmentUpdate) {
       const uploadedAttachments = await saveUploadedAttachments(req.files);
@@ -1796,6 +1782,8 @@ exports.convertToInvoice = async (req, res) => {
       deliveryCost: normalizeDeliveryCost(quotation.deliveryCost),
       notes: quotation.notes,
       terms: paymentTerms || quotation.terms,
+      recipientType: quotation.recipientType || (quotation.isOneTimeCustomer ? 'one-time' : 'customer'),
+      isOneTimeCustomer: Boolean(quotation.isOneTimeCustomer || quotation.recipientType === 'one-time'),
       status: 'confirmed',
       createdBy: req.user.id,
     });

@@ -173,6 +173,15 @@ const invoiceSchema = new mongoose.Schema(
 
     notes: { type: String, trim: true },
     terms: { type: String, trim: true },
+    recipientType: {
+      type: String,
+      enum: ['customer', 'supplier', 'one-time'],
+      default: 'customer',
+    },
+    isOneTimeCustomer: {
+      type: Boolean,
+      default: false,
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -184,16 +193,45 @@ const invoiceSchema = new mongoose.Schema(
 
 // Generate invoice number before saving
 invoiceSchema.pre('save', async function () {
-  if (this.isNew && !this.invoiceNumber) {
-    const year = new Date().getFullYear();
-    const count = await this.constructor.countDocuments({
-      createdAt: {
-        $gte: new Date(`${year}-01-01`),
-        $lt: new Date(`${year + 1}-01-01`),
-      },
-    });
-    this.invoiceNumber = `INV-${year}-${String(count + 1).padStart(4, '0')}`;
+  if (!this.isNew || this.invoiceNumber) return;
+
+  const year = new Date().getFullYear();
+  const prefix = `INV-${year}-`;
+
+  const latestForYear = await this.constructor
+    .findOne({
+      invoiceNumber: { $regex: `^${prefix}\\d+$` },
+    })
+    .select('invoiceNumber')
+    .sort({ invoiceNumber: -1 })
+    .lean();
+
+  const latestSeq = latestForYear?.invoiceNumber
+    ? Number.parseInt(String(latestForYear.invoiceNumber).split('-').pop(), 10)
+    : 0;
+
+  const baseCount = await this.constructor.countDocuments({
+    createdAt: {
+      $gte: new Date(`${year}-01-01`),
+      $lt: new Date(`${year + 1}-01-01`),
+    },
+  });
+
+  let sequence = Math.max(Number.isFinite(latestSeq) ? latestSeq + 1 : 1, baseCount + 1);
+  const maxAttempts = 10000;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const candidate = `INV-${year}-${String(sequence).padStart(4, '0')}`;
+    // eslint-disable-next-line no-await-in-loop
+    const exists = await this.constructor.exists({ invoiceNumber: candidate });
+    if (!exists) {
+      this.invoiceNumber = candidate;
+      return;
+    }
+    sequence += 1;
   }
+
+  throw new Error(`Unable to generate unique invoice number for year ${year}`);
 });
 
 // Calculate subtotal/grandTotal and payment fields before saving

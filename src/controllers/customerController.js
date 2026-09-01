@@ -875,3 +875,133 @@ exports.sendCustomerMonthlyStatementEmail = async (req, res) => {
     });
   }
 };
+
+// @desc    Get one-time customers aggregated from quotes & invoices
+// @route   GET /api/customers/one-time
+// @access  Private
+exports.getOneTimeCustomers = async (req, res) => {
+  try {
+    const { search, page = 1, limit = 10, sortBy = 'lastActiveDate', sortOrder = 'desc' } = req.query;
+
+    const oneTimeFilter = {
+      $or: [
+        { isOneTimeCustomer: true },
+        { recipientType: 'one-time' },
+      ],
+    };
+
+    const [invoices, quotations] = await Promise.all([
+      Invoice.find(oneTimeFilter)
+        .select('invoiceNumber customerName customerPhone customerEmail customerAddress deliveryAddress grandTotal createdAt invoiceDate')
+        .lean(),
+      Quotation.find(oneTimeFilter)
+        .select('quotationNumber customerName customerPhone customerEmail customerAddress deliveryAddress grandTotal createdAt quotationDate')
+        .lean(),
+    ]);
+
+    const map = new Map();
+
+    const processRecord = (rec, type) => {
+      const name = String(rec.customerName || '').trim();
+      if (!name) return;
+      const phone = String(rec.customerPhone || '').trim();
+      const email = String(rec.customerEmail || '').trim().toLowerCase();
+      const address = String(rec.customerAddress || rec.deliveryAddress || '').trim();
+      const date = rec.invoiceDate || rec.quotationDate || rec.createdAt || new Date();
+      const amount = Number(rec.grandTotal) || 0;
+
+      const key = `${name.toLowerCase()}__${email || phone || 'none'}`;
+
+      if (!map.has(key)) {
+        map.set(key, {
+          _id: key,
+          name,
+          phone,
+          email,
+          address,
+          totalInvoices: 0,
+          totalQuotations: 0,
+          totalSpent: 0,
+          lastActiveDate: date,
+          invoiceNumbers: [],
+          quotationNumbers: [],
+        });
+      }
+
+      const entry = map.get(key);
+      if (!entry.phone && phone) entry.phone = phone;
+      if (!entry.email && email) entry.email = email;
+      if (!entry.address && address) entry.address = address;
+
+      if (new Date(date) > new Date(entry.lastActiveDate)) {
+        entry.lastActiveDate = date;
+      }
+
+      if (type === 'invoice') {
+        entry.totalInvoices += 1;
+        entry.totalSpent = roundMoney(entry.totalSpent + amount);
+        if (rec.invoiceNumber && !entry.invoiceNumbers.includes(rec.invoiceNumber)) {
+          entry.invoiceNumbers.push(rec.invoiceNumber);
+        }
+      } else if (type === 'quotation') {
+        entry.totalQuotations += 1;
+        if (rec.quotationNumber && !entry.quotationNumbers.includes(rec.quotationNumber)) {
+          entry.quotationNumbers.push(rec.quotationNumber);
+        }
+      }
+    };
+
+    invoices.forEach((inv) => processRecord(inv, 'invoice'));
+    quotations.forEach((qt) => processRecord(qt, 'quotation'));
+
+    let results = Array.from(map.values());
+
+    if (search && search.trim()) {
+      const q = search.trim().toLowerCase();
+      results = results.filter(
+        (c) =>
+          c.name.toLowerCase().includes(q) ||
+          (c.phone && c.phone.toLowerCase().includes(q)) ||
+          (c.email && c.email.toLowerCase().includes(q)) ||
+          (c.address && c.address.toLowerCase().includes(q))
+      );
+    }
+
+    results.sort((a, b) => {
+      let aVal = a[sortBy];
+      let bVal = b[sortBy];
+      if (sortBy === 'lastActiveDate') {
+        aVal = new Date(aVal || 0).getTime();
+        bVal = new Date(bVal || 0).getTime();
+      }
+      if (aVal < bVal) return sortOrder === 'asc' ? -1 : 1;
+      if (aVal > bVal) return sortOrder === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+    const total = results.length;
+    const pageNum = Math.max(Number(page) || 1, 1);
+    const limitNum = Math.max(Number(limit) || 10, 1);
+    const startIndex = (pageNum - 1) * limitNum;
+    const paginated = results.slice(startIndex, startIndex + limitNum);
+
+    res.status(200).json({
+      success: true,
+      customers: paginated,
+      total,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.max(Math.ceil(total / limitNum), 1),
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching one-time customers:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch one-time customers',
+      error: error.message,
+    });
+  }
+};
