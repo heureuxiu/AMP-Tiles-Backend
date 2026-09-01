@@ -149,3 +149,7 @@ The current implementation writes attachment files to EC2 local disk. This is no
 ## AWS CLI Deployment Note
 
 No AWS resources have been created. If you later want AWS CLI provisioning, confirm first because EC2, Elastic IPs, load balancers, NAT gateways, and storage can create billable resources.
+
+
+updated... 
+

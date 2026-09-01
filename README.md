@@ -101,3 +101,8 @@ CLIENT_URL=http://localhost:3000
 - role (String, enum: ['admin', 'user'], default: 'admin')
 - isActive (Boolean, default: true)
 - timestamps (createdAt, updatedAt)
+
+update... 
+ksjdlkajsdkljas aklsjlk
+kjsalkdjaksjda
+'askl
